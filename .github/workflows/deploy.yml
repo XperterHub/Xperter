@@ -37,9 +37,12 @@ jobs:
         run: bun test src/test/profile-vault-inbox.test.ts
 
       - name: Build project
-        run: bun run build
+        run: |
+          bun run build
+          bun run scripts/prepare-pages.ts
         env:
           NODE_ENV: production
+          GITHUB_PAGES: "true"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

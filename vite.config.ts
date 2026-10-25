@@ -6,13 +6,20 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+const isPages = process.env.GITHUB_PAGES === "true";
+
 export default defineConfig({
+  nitro: process.env.NITRO_PRESET ? { preset: process.env.NITRO_PRESET } : undefined,
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
     server: { entry: "server" },
+    router: {
+      basepath: isPages ? "/Xperter" : undefined,
+    },
   },
   vite: {
+    base: isPages ? "/Xperter/" : "/",
     optimizeDeps: {
       include: [
         "use-sync-external-store/shim/with-selector",
