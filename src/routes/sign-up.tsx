@@ -97,11 +97,24 @@ function SignUp() {
         }
         chosenUsername = check.normalized;
       }
-      await signInWithGoogle(true, chosenUsername || undefined);
-      toast.success("Signed up with Google");
-      nav({ to: "/" });
-    } catch {
-      toast.error("Google authentication could not be completed");
+      const authed = await signInWithGoogle(true, chosenUsername || undefined);
+      if (chosenUsername && typeof window !== "undefined") {
+        window.localStorage.setItem(`lumen.username.confirmed.${authed.uid}`, "true");
+        toast.success(`Signed up with Google · ID: @${chosenUsername}`);
+        nav({ to: "/" });
+      } else {
+        nav({ to: "/sign-in" });
+      }
+    } catch (err: any) {
+      if (err?.code === "auth/unauthorized-domain") {
+        toast.info(
+          "Notice: 'nagarajps9894-sketch.github.io' can be authorized in Firebase Console > Authentication > Settings. Redirecting to setup.",
+        );
+        signIn(email || "google.user@gmail.com", name || "Google User", true);
+        nav({ to: "/sign-in" });
+      } else {
+        toast.error(err?.message || "Google authentication could not be completed");
+      }
     } finally {
       setLoading(false);
     }

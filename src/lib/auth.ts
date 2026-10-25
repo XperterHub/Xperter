@@ -678,6 +678,11 @@ export async function signInWithEmailPassword(
       window.localStorage.setItem(REMEMBERED_EMAIL_KEY, userCred.user.email);
     } catch {}
   }
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(`lumen.username.confirmed.${uid}`, "true");
+    } catch {}
+  }
   return syncUserProfileToFirestore(userCred.user, true);
 }
 
@@ -710,6 +715,12 @@ export async function signUpWithEmailPassword(
   const cleanId = sanitizeUsernameId(customUsername || deriveLumenId(uid));
   writeProfileOverride(uid, { name: cleanName, lumenId: cleanId });
   saveClaimedUsername(cleanId, uid);
+
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(`lumen.username.confirmed.${uid}`, "true");
+    } catch {}
+  }
 
   return syncUserProfileToFirestore(userCred.user, true);
 }

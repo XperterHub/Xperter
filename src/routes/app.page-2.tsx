@@ -69,8 +69,10 @@ import {
   type StoredVaultDocument,
 } from "@/lib/google-drive-vault";
 import {
+  checkUsernameRenameEligibility,
   formatVaultDocumentFileName,
   formatVaultFolderName,
+  recordUsernameRename,
   sanitizeUsernameId,
   VAULT_DOCUMENT_TYPES,
   type VaultDocKey,
@@ -205,6 +207,10 @@ function ProfilePage() {
   });
   const [availability, setAvailability] = useState<UsernameAvailabilityStatus | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
+
+  const renameEligibility = useMemo(() => {
+    return checkUsernameRenameEligibility(effectiveUid);
+  }, [effectiveUid, currentUsername, isEditingProfile]);
 
   useEffect(() => {
     if (user) {
@@ -503,6 +509,18 @@ function ProfilePage() {
         return;
       }
 
+      const isRenaming = check.normalized !== currentUsername;
+      if (isRenaming) {
+        const eligibility = checkUsernameRenameEligibility(effectiveUid);
+        if (!eligibility.canRename) {
+          toast.error(
+            `You can only change your Username ID 3 times within a 2-week period. Next change available in ${eligibility.daysUntilNextReset ?? 14} day(s).`,
+          );
+          setSavingProfile(false);
+          return;
+        }
+      }
+
       if (typeof window !== "undefined") {
         window.localStorage.setItem(`lumen.profile.about.${effectiveUid}`, editAbout.trim());
       }
@@ -514,6 +532,10 @@ function ProfilePage() {
           photoURL: editPhotoURL,
           about: editAbout.trim(),
         });
+      }
+
+      if (isRenaming) {
+        recordUsernameRename(effectiveUid);
       }
 
       // Automatically update all stored vault document filenames to match the new `<username>_doc` prefix
@@ -1040,6 +1062,26 @@ function ProfilePage() {
                     onAvailabilityChange={setAvailability}
                     compact
                   />
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5 pt-1">
+                    <span>
+                      Renames remaining:{" "}
+                      <strong
+                        className={
+                          renameEligibility.renamesRemaining === 0
+                            ? "font-mono font-bold text-rose-500"
+                            : "font-mono font-bold text-emerald-500"
+                        }
+                      >
+                        {renameEligibility.renamesRemaining} of {renameEligibility.totalAllowed}
+                      </strong>{" "}
+                      (2-week period)
+                    </span>
+                    {renameEligibility.daysUntilNextReset && renameEligibility.renamesRemaining < 3 && (
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        Resets in {renameEligibility.daysUntilNextReset}d
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* Account Email (WhatsApp Phone/Account item) */}
@@ -1092,7 +1134,12 @@ function ProfilePage() {
             <div className="space-y-4 pt-1">
               <div className="space-y-2.5 rounded-2xl border border-glass-edge bg-glass/30 p-4">
                 <div className="flex items-center justify-between border-b border-glass-edge/50 pb-2.5 text-xs">
-                  <span className="text-muted-foreground">Username ID</span>
+                  <div>
+                    <span className="text-muted-foreground">Username ID</span>
+                    <div className="text-[10px] text-muted-foreground font-mono">
+                      {renameEligibility.renamesRemaining} of {renameEligibility.totalAllowed} renames left (2w)
+                    </div>
+                  </div>
                   <span className="font-mono font-medium text-foreground">@{editUsername || currentUsername}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs pt-0.5">
@@ -1485,7 +1532,7 @@ function ProfilePage() {
                     type="text"
                     value={renameFolderInput}
                     onChange={(e) => setRenameFolderInput(e.target.value)}
-                    placeholder="e.g. nagaraj_98_doc"
+                    placeholder="Enter folder name"
                     className="w-full bg-transparent text-xs font-sans font-semibold outline-none"
                     autoFocus
                   />

@@ -1,19 +1,100 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import gsap from "gsap";
 import { APP_NAME, GLYPH_IMAGES } from "@/lib/config";
 
-export function BrandIcon({ size = 56, src = GLYPH_IMAGES.brand }: { size?: number; src?: string }) {
+export function XperterLogoSvg({ size = 44, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+    >
+      <defs>
+        <linearGradient id="xperter-chrome-primary" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#FFFFFF" />
+          <stop offset="35%" stopColor="#E4E7EC" />
+          <stop offset="68%" stopColor="#9CA3AF" />
+          <stop offset="100%" stopColor="#F9FAFB" />
+        </linearGradient>
+        <linearGradient id="xperter-glass-secondary" x1="54" y1="10" x2="10" y2="54" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.92" />
+          <stop offset="50%" stopColor="#D1D5DB" stopOpacity="0.48" />
+          <stop offset="100%" stopColor="#9CA3AF" stopOpacity="0.82" />
+        </linearGradient>
+        <linearGradient id="xperter-edge-rim" x1="12" y1="6" x2="52" y2="58" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.95" />
+          <stop offset="50%" stopColor="#FFFFFF" stopOpacity="0.2" />
+          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.75" />
+        </linearGradient>
+        <radialGradient id="xperter-core-glow" cx="50%" cy="50%" r="42%">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.45" />
+          <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+
+      {/* Subtle inner glass ambient glow */}
+      <circle cx="32" cy="32" r="24" fill="url(#xperter-core-glow)" />
+
+      {/* Outer frosted glass octagonal ring */}
+      <rect
+        x="10"
+        y="10"
+        width="44"
+        height="44"
+        rx="14"
+        fill="url(#xperter-glass-secondary)"
+        fillOpacity="0.16"
+        stroke="url(#xperter-edge-rim)"
+        strokeWidth="1.5"
+      />
+
+      {/* Back intersecting glass ribbon (top-right to bottom-left) */}
+      <path
+        d="M44.5 16.5C46.433 18.433 46.433 21.567 44.5 23.5L23.5 44.5C21.567 46.433 18.433 46.433 16.5 44.5C14.567 42.567 14.567 39.433 16.5 37.5L37.5 16.5C39.433 14.567 42.567 14.567 44.5 16.5Z"
+        fill="url(#xperter-glass-secondary)"
+        stroke="url(#xperter-edge-rim)"
+        strokeWidth="1.2"
+      />
+
+      {/* Front liquid chrome ribbon (top-left to bottom-right) */}
+      <path
+        d="M16.5 16.5C18.433 14.567 21.567 14.567 23.5 16.5L44.5 37.5C46.433 39.433 46.433 42.567 44.5 44.5C42.567 46.433 39.433 46.433 37.5 44.5L16.5 23.5C14.567 21.567 14.567 18.433 16.5 16.5Z"
+        fill="url(#xperter-chrome-primary)"
+        stroke="#FFFFFF"
+        strokeOpacity="0.85"
+        strokeWidth="1.2"
+      />
+
+      {/* Center specular diamond node */}
+      <rect
+        x="28.5"
+        y="28.5"
+        width="7"
+        height="7"
+        rx="2"
+        transform="rotate(45 32 32)"
+        fill="#FFFFFF"
+        fillOpacity="0.95"
+      />
+    </svg>
+  );
+}
+
+export function BrandIcon({ size = 56, src }: { size?: number; src?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
+  const iconRef = useRef<HTMLDivElement>(null);
   const iconSize = Math.round(size * 0.78);
 
   useEffect(() => {
-    const img = imgRef.current;
+    const icon = iconRef.current;
     const wrap = wrapRef.current;
-    if (!img || !wrap) return;
+    if (!icon || !wrap) return;
 
-    const floatTween = gsap.to(img, {
+    const floatTween = gsap.to(icon, {
       y: -1.5,
       scale: 1.03,
       duration: 2.6,
@@ -22,10 +103,10 @@ export function BrandIcon({ size = 56, src = GLYPH_IMAGES.brand }: { size?: numb
       yoyo: true,
     });
 
-    const rxTo = gsap.quickTo(img, "rotationX", { duration: 0.45, ease: "power3.out" });
-    const ryTo = gsap.quickTo(img, "rotationY", { duration: 0.45, ease: "power3.out" });
-    const xTo = gsap.quickTo(img, "x", { duration: 0.45, ease: "power3.out" });
-    const yTo = gsap.quickTo(img, "y", { duration: 0.45, ease: "power3.out" });
+    const rxTo = gsap.quickTo(icon, "rotationX", { duration: 0.45, ease: "power3.out" });
+    const ryTo = gsap.quickTo(icon, "rotationY", { duration: 0.45, ease: "power3.out" });
+    const xTo = gsap.quickTo(icon, "x", { duration: 0.45, ease: "power3.out" });
+    const yTo = gsap.quickTo(icon, "y", { duration: 0.45, ease: "power3.out" });
 
     const onMove = (e: PointerEvent) => {
       const r = wrap.getBoundingClientRect();
@@ -56,19 +137,30 @@ export function BrandIcon({ size = 56, src = GLYPH_IMAGES.brand }: { size?: numb
   return (
     <div
       ref={wrapRef}
-      className="glass relative flex items-center justify-center overflow-hidden rounded-full border border-glass-edge shadow-[inset_0_1px_1px_rgba(255,255,255,0.28)]"
+      className="glass relative flex items-center justify-center overflow-hidden rounded-full border border-glass-edge shadow-[inset_0_1px_1px_rgba(255,255,255,0.28)] bg-glass/60"
       style={{ width: size, height: size, perspective: "320px" }}
     >
-      <img
-        ref={imgRef}
-        src={src}
-        alt="Xperter logo"
-        referrerPolicy="no-referrer"
-        draggable={false}
-        width={iconSize}
-        height={iconSize}
-        className="select-none object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.45)] will-change-transform"
-      />
+      <div
+        ref={iconRef}
+        className="flex items-center justify-center will-change-transform drop-shadow-[0_4px_10px_rgba(0,0,0,0.45)] select-none"
+      >
+        {src ? (
+          <img
+            src={src}
+            alt="Xperter logo"
+            draggable={false}
+            width={iconSize}
+            height={iconSize}
+            className="object-contain"
+            onError={(e) => {
+              // Hide broken image icon if custom src fails
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : (
+          <XperterLogoSvg size={iconSize} />
+        )}
+      </div>
     </div>
   );
 }

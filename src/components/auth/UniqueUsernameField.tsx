@@ -111,7 +111,7 @@ export function UniqueUsernameField({
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. nagaraj_98 or LMN-7K4P9X"
+          placeholder="Enter username ID"
           aria-label="Username ID"
           className="w-full min-w-0 bg-transparent font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground"
         />

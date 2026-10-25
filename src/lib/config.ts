@@ -2,15 +2,25 @@ export const APP_NAME = "Lumen";
 
 export type GlyphKind = "hero" | "messages" | "rings" | "cross" | "knot" | "square" | "segments" | "brand";
 
+const getBasePath = () => {
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/Xperter")) {
+    return "/Xperter";
+  }
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  return base || "";
+};
+
+const base = getBasePath();
+
 export const GLYPH_IMAGES: Record<GlyphKind, string> = {
-  brand: "/assets/glyphs/glyph-r1c1.png",
-  hero: "/assets/glyphs/glyph-r3c3.png",
-  messages: "/assets/glyphs/glyph-r2c5.png",
-  rings: "/assets/glyphs/glyph-r1c3.png",
-  cross: "/assets/glyphs/glyph-r1c4.png",
-  knot: "/assets/glyphs/glyph-r2c4.png",
-  square: "/assets/glyphs/glyph-r3c4.png",
-  segments: "/assets/glyphs/glyph-r5c3.png",
+  brand: `${base}/assets/glyphs/glyph-r1c1.png`,
+  hero: `${base}/assets/glyphs/glyph-r3c3.png`,
+  messages: `${base}/assets/glyphs/glyph-r2c5.png`,
+  rings: `${base}/assets/glyphs/glyph-r1c3.png`,
+  cross: `${base}/assets/glyphs/glyph-r1c4.png`,
+  knot: `${base}/assets/glyphs/glyph-r2c4.png`,
+  square: `${base}/assets/glyphs/glyph-r3c4.png`,
+  segments: `${base}/assets/glyphs/glyph-r5c3.png`,
 };
 
 export const APP_PAGES = [

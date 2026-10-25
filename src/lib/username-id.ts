@@ -308,3 +308,101 @@ export function generateUsernameSuggestions(
 
   return results;
 }
+
+export const USERNAME_RENAME_LIMIT = 3;
+export const USERNAME_RENAME_WINDOW_MS = 14 * 24 * 60 * 60 * 1000; // 14 days (2 weeks)
+
+export interface RenameLimitStatus {
+  canRename: boolean;
+  renamesUsed: number;
+  renamesRemaining: number;
+  totalAllowed: number;
+  nextResetDate?: Date;
+  daysUntilNextReset?: number;
+}
+
+const inMemoryStore = new Map<string, string>();
+const memoryStorage: Storage = {
+  getItem: (key: string) => inMemoryStore.get(key) ?? null,
+  setItem: (key: string, val: string) => {
+    inMemoryStore.set(key, String(val));
+  },
+  removeItem: (key: string) => {
+    inMemoryStore.delete(key);
+  },
+  clear: () => {
+    inMemoryStore.clear();
+  },
+  key: (index: number) => Array.from(inMemoryStore.keys())[index] ?? null,
+  get length() {
+    return inMemoryStore.size;
+  },
+};
+
+function getSafeStorage(): Storage {
+  if (typeof window !== "undefined" && window.localStorage) {
+    return window.localStorage;
+  }
+  if (typeof globalThis !== "undefined" && (globalThis as any).localStorage) {
+    return (globalThis as any).localStorage as Storage;
+  }
+  return memoryStorage;
+}
+
+export function getUsernameRenameHistory(uid: string): number[] {
+  const storage = getSafeStorage();
+  try {
+    const raw = storage.getItem(`lumen.username.renameHistory.${uid}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "number") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function checkUsernameRenameEligibility(uid: string, now: number = Date.now()): RenameLimitStatus {
+  const history = getUsernameRenameHistory(uid);
+  const cutoff = now - USERNAME_RENAME_WINDOW_MS;
+  const recentRenames = history.filter((ts) => ts > cutoff);
+
+  const renamesUsed = recentRenames.length;
+  const renamesRemaining = Math.max(0, USERNAME_RENAME_LIMIT - renamesUsed);
+  const canRename = renamesRemaining > 0;
+
+  let nextResetDate: Date | undefined;
+  let daysUntilNextReset: number | undefined;
+
+  if (recentRenames.length > 0) {
+    const oldestRecent = Math.min(...recentRenames);
+    const resetTime = oldestRecent + USERNAME_RENAME_WINDOW_MS;
+    nextResetDate = new Date(resetTime);
+    daysUntilNextReset = Math.max(1, Math.ceil((resetTime - now) / (24 * 60 * 60 * 1000)));
+  }
+
+  return {
+    canRename,
+    renamesUsed,
+    renamesRemaining,
+    totalAllowed: USERNAME_RENAME_LIMIT,
+    nextResetDate,
+    daysUntilNextReset,
+  };
+}
+
+export function recordUsernameRename(uid: string, timestamp: number = Date.now()): void {
+  const storage = getSafeStorage();
+  const history = getUsernameRenameHistory(uid);
+  const cutoff = timestamp - USERNAME_RENAME_WINDOW_MS;
+  const recentRenames = history.filter((ts) => ts > cutoff);
+  recentRenames.push(timestamp);
+  try {
+    storage.setItem(
+      `lumen.username.renameHistory.${uid}`,
+      JSON.stringify(recentRenames),
+    );
+  } catch {
+    // Ignore storage errors
+  }
+}
+

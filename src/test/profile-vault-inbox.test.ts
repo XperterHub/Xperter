@@ -157,5 +157,57 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(loaded[0]?.name).toBe("architecture_diagram.png");
     expect(loaded[0]?.folderName).toBe("my_custom_project_vault");
   });
+
+  it("enforces username ID rename rate limit: 3 renames per 2-week period", async () => {
+    const {
+      checkUsernameRenameEligibility,
+      recordUsernameRename,
+      USERNAME_RENAME_LIMIT,
+      USERNAME_RENAME_WINDOW_MS,
+    } = await import("@/lib/username-id");
+
+    const uid = "usr_rename_test_user";
+    const now = 1700000000000; // Reference timestamp
+
+    // 1. Initial state: full quota
+    const initial = checkUsernameRenameEligibility(uid, now);
+    expect(initial.canRename).toBe(true);
+    expect(initial.renamesRemaining).toBe(USERNAME_RENAME_LIMIT); // 3
+    expect(initial.renamesUsed).toBe(0);
+
+    // 2. Perform 1st rename
+    recordUsernameRename(uid, now);
+    const after1 = checkUsernameRenameEligibility(uid, now);
+    expect(after1.canRename).toBe(true);
+    expect(after1.renamesRemaining).toBe(2);
+    expect(after1.renamesUsed).toBe(1);
+
+    // 3. Perform 2nd rename
+    recordUsernameRename(uid, now + 1000);
+    const after2 = checkUsernameRenameEligibility(uid, now + 1000);
+    expect(after2.canRename).toBe(true);
+    expect(after2.renamesRemaining).toBe(1);
+    expect(after2.renamesUsed).toBe(2);
+
+    // 4. Perform 3rd rename
+    recordUsernameRename(uid, now + 2000);
+    const after3 = checkUsernameRenameEligibility(uid, now + 2000);
+    expect(after3.canRename).toBe(false);
+    expect(after3.renamesRemaining).toBe(0);
+    expect(after3.renamesUsed).toBe(3);
+    expect(after3.daysUntilNextReset).toBeGreaterThanOrEqual(13);
+
+    // 5. Check within the 2-week window (e.g. 7 days later): still blocked
+    const sevenDaysLater = now + 7 * 24 * 60 * 60 * 1000;
+    const midWindow = checkUsernameRenameEligibility(uid, sevenDaysLater);
+    expect(midWindow.canRename).toBe(false);
+    expect(midWindow.renamesRemaining).toBe(0);
+
+    // 6. Check after the 2-week period (14 days + 1 minute later): 1st rename expired, can rename again!
+    const afterWindow = now + USERNAME_RENAME_WINDOW_MS + 60 * 1000;
+    const expiredStatus = checkUsernameRenameEligibility(uid, afterWindow);
+    expect(expiredStatus.canRename).toBe(true);
+    expect(expiredStatus.renamesRemaining).toBeGreaterThan(0);
+  });
 });
 
