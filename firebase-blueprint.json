@@ -1,0 +1,495 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile record in the users collection searchable by display name or unique Lumen user ID.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "lumenId": {
+          "type": "string",
+          "description": "Unique shareable Lumen User ID (e.g. LMN-XXXXXX).",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "displayNameLower": {
+          "type": "string",
+          "description": "Lowercase display name for case-insensitive prefix search.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address of the user.",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Optional profile avatar URL (empty string if none).",
+          "maxLength": 2048
+        },
+        "searchable": {
+          "type": "boolean",
+          "description": "Whether this user profile can be discovered by display name or user ID."
+        },
+        "theme": {
+          "type": "string",
+          "description": "Saved user theme preference (light or dark).",
+          "enum": ["light", "dark"]
+        },
+        "blur": {
+          "type": "integer",
+          "description": "Saved user frost blur level (4 to 48)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "email", "photoURL", "createdAt", "updatedAt"]
+    },
+    "UserDirectoryEntry": {
+      "title": "UserDirectoryEntry",
+      "description": "Public non-PII directory entry mapping a shareable Lumen User ID to a user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "lumenId": {
+          "type": "string",
+          "description": "Unique shareable Lumen User ID (e.g. LMN-XXXXXX).",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Public display name.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "handle": {
+          "type": "string",
+          "description": "Public handle identifier.",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "typingToLumenId": {
+          "type": "string",
+          "description": "Target Lumen ID the user is currently typing a message to (empty string if idle).",
+          "maxLength": 32
+        },
+        "typingFromName": {
+          "type": "string",
+          "description": "Display name of the typing user.",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the directory entry was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the directory entry was last updated."
+        }
+      },
+      "required": ["uid", "lumenId", "displayName", "handle", "createdAt", "updatedAt"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "A friend request sent using a Lumen User ID to initiate a conversation.",
+      "type": "object",
+      "properties": {
+        "fromUid": {
+          "type": "string",
+          "description": "UID of the user sending the friend request.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "fromLumenId": {
+          "type": "string",
+          "description": "Lumen User ID of the sender.",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "fromName": {
+          "type": "string",
+          "description": "Display name of the sender.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "toUid": {
+          "type": "string",
+          "description": "UID of the recipient user (or placeholder ID if pending directory match).",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "toLumenId": {
+          "type": "string",
+          "description": "Target Lumen User ID of the recipient.",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "toName": {
+          "type": "string",
+          "description": "Display name of the recipient.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "status": {
+          "type": "string",
+          "description": "Current status of the friend request.",
+          "enum": ["pending", "accepted", "declined"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the request was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the request was last updated."
+        }
+      },
+      "required": [
+        "fromUid",
+        "fromLumenId",
+        "fromName",
+        "toUid",
+        "toLumenId",
+        "toName",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "A conversation document in Firestore linking two user IDs (or a group space).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who initiated this conversation.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "participantIds": {
+          "type": "array",
+          "description": "Bounded 2-element array of the two linked user IDs [userA, userB]."
+        },
+        "participantLumenIds": {
+          "type": "array",
+          "description": "Bounded 2-element array of the two linked Lumen User IDs [LMN-A, LMN-B]."
+        },
+        "peerUserId": {
+          "type": "string",
+          "description": "UID of the other user linked in this conversation.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "peerLumenId": {
+          "type": "string",
+          "description": "Unique Lumen User ID of the other participant.",
+          "minLength": 4,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the contact or group.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "handle": {
+          "type": "string",
+          "description": "Handle identifier such as @user.name.",
+          "minLength": 2,
+          "maxLength": 60
+        },
+        "role": {
+          "type": "string",
+          "description": "Subtitle or role description for the thread.",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "isGroup": {
+          "type": "boolean",
+          "description": "Whether this conversation is a group space."
+        },
+        "memberCount": {
+          "type": "integer",
+          "description": "Number of members in the conversation."
+        },
+        "pinned": {
+          "type": "boolean",
+          "description": "Whether the conversation is pinned in the sidebar."
+        },
+        "unread": {
+          "type": "integer",
+          "description": "Unread message count."
+        },
+        "pinnedMsgId": {
+          "type": "string",
+          "description": "ID of the currently pinned message or empty string.",
+          "maxLength": 128
+        },
+        "lastMessageText": {
+          "type": "string",
+          "description": "Preview text of the most recent message.",
+          "maxLength": 500
+        },
+        "lastMessageTime": {
+          "type": "string",
+          "description": "Formatted time of the most recent message.",
+          "maxLength": 32
+        },
+        "typingUserId": {
+          "type": "string",
+          "description": "UID of the participant currently typing in this conversation (empty string when idle).",
+          "maxLength": 128
+        },
+        "typingUserName": {
+          "type": "string",
+          "description": "Display name of the participant currently typing in this conversation (empty string when idle).",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the conversation was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the conversation was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "handle",
+        "role",
+        "isGroup",
+        "memberCount",
+        "pinned",
+        "unread",
+        "pinnedMsgId",
+        "lastMessageText",
+        "lastMessageTime",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A message inside a conversation thread.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "UID of the user who owns this message.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "conversationId": {
+          "type": "string",
+          "description": "ID of the parent conversation.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the message sender.",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "me": {
+          "type": "boolean",
+          "description": "Whether the message was sent by the current user."
+        },
+        "kind": {
+          "type": "string",
+          "description": "Type of message payload.",
+          "enum": ["text", "poll", "attachment", "voice"]
+        },
+        "text": {
+          "type": "string",
+          "description": "Message body text.",
+          "maxLength": 2000
+        },
+        "time": {
+          "type": "string",
+          "description": "Formatted display time (HH:MM).",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "dateGroup": {
+          "type": "string",
+          "description": "Date grouping label such as Today.",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "edited": {
+          "type": "boolean",
+          "description": "Whether the message text has been edited."
+        },
+        "replyToId": {
+          "type": "string",
+          "description": "ID of the message being replied to, or empty string.",
+          "maxLength": 128
+        },
+        "forwardedFrom": {
+          "type": "string",
+          "description": "Name of the source thread if forwarded, or empty string.",
+          "maxLength": 80
+        },
+        "status": {
+          "type": "string",
+          "description": "Delivery status of the message.",
+          "enum": ["sent", "read"]
+        },
+        "attachmentName": {
+          "type": "string",
+          "description": "Attachment file name if kind is attachment.",
+          "maxLength": 200
+        },
+        "attachmentSize": {
+          "type": "string",
+          "description": "Formatted attachment size if kind is attachment.",
+          "maxLength": 40
+        },
+        "attachmentUrl": {
+          "type": "string",
+          "description": "Data URL or link for the attachment.",
+          "maxLength": 500000
+        },
+        "attachmentIsImage": {
+          "type": "boolean",
+          "description": "Whether the attachment is an image."
+        },
+        "audioUrl": {
+          "type": "string",
+          "description": "Data URL for recorded voice notes.",
+          "maxLength": 500000
+        },
+        "audioDuration": {
+          "type": "integer",
+          "description": "Voice note duration in seconds."
+        },
+        "pollQuestion": {
+          "type": "string",
+          "description": "Poll question if kind is poll.",
+          "maxLength": 300
+        },
+        "pollOptions": {
+          "type": "array",
+          "description": "Poll option labels (up to 4 strings)."
+        },
+        "pollVotes": {
+          "type": "array",
+          "description": "Selected poll option labels voted by the user (up to 4 strings)."
+        },
+        "reactions": {
+          "type": "array",
+          "description": "Emoji strings reacted to this message (up to 13 strings)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the message was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the message was last updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "conversationId",
+        "senderName",
+        "me",
+        "kind",
+        "text",
+        "time",
+        "dateGroup",
+        "edited",
+        "replyToId",
+        "forwardedFrom",
+        "status",
+        "attachmentName",
+        "attachmentSize",
+        "attachmentUrl",
+        "attachmentIsImage",
+        "audioUrl",
+        "audioDuration",
+        "pollQuestion",
+        "pollOptions",
+        "pollVotes",
+        "reactions",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile documents searchable by display name or unique Lumen User ID."
+    },
+    "/userDirectory/{lumenId}": {
+      "schema": { "$ref": "#/entities/UserDirectoryEntry" },
+      "description": "Public non-PII user ID directory for looking up a user by their Lumen ID."
+    },
+    "/friendRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/FriendRequest" },
+      "description": "Friend requests sent between users by Lumen ID to start conversations."
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "User conversations linking two user IDs (or group spaces)."
+    },
+    "/conversations/{conversationId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Messages belonging to a specific conversation."
+    }
+  }
+}

@@ -1,0 +1,395 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global Safety Net (Default-Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn();
+    }
+
+    function isOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function isValidLumenId(id) {
+      return id is string && id.size() >= 4 && id.size() <= 32 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Master Gate helper for Conversation parent lookup (supports ownerId or linked participantIds)
+    function isConversationMember(conversationId) {
+      return exists(/databases/$(database)/documents/conversations/$(conversationId)) && (
+        get(/databases/$(database)/documents/conversations/$(conversationId)).data.ownerId == request.auth.uid ||
+        (
+          'participantIds' in get(/databases/$(database)/documents/conversations/$(conversationId)).data &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
+        )
+      );
+    }
+
+    // Validation Blueprint: UserProfile
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'lumenId', 'displayName', 'displayNameLower',
+          'email', 'photoURL', 'searchable', 'theme', 'blur', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        (!('lumenId' in data) || isValidLumenId(data.lumenId)) &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        (!('displayNameLower' in data) || (data.displayNameLower is string && data.displayNameLower.size() >= 1 && data.displayNameLower.size() <= 80)) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 254 &&
+        data.photoURL is string && data.photoURL.size() <= 2048 &&
+        (!('searchable' in data) || data.searchable is bool) &&
+        (!('theme' in data) || (data.theme is string && data.theme in ['light', 'dark'])) &&
+        (!('blur' in data) || (data.blur is int && data.blur >= 4 && data.blur <= 48)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: UserDirectoryEntry (Non-PII public handle, Lumen ID & typing indicator directory)
+    function isValidUserDirectoryEntry(data, lumenId) {
+      return data.keys().hasAll(['uid', 'lumenId', 'displayName', 'handle', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'uid', 'lumenId', 'displayName', 'handle',
+          'typingToLumenId', 'typingFromName', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        isValidLumenId(data.lumenId) &&
+        data.lumenId == lumenId &&
+        data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+        data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 60 &&
+        (!('typingToLumenId' in data) || (data.typingToLumenId is string && data.typingToLumenId.size() <= 32)) &&
+        (!('typingFromName' in data) || (data.typingFromName is string && data.typingFromName.size() <= 80)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: FriendRequest
+    function isValidFriendRequest(data) {
+      return data.keys().hasAll([
+          'fromUid', 'fromLumenId', 'fromName',
+          'toUid', 'toLumenId', 'toName',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'fromUid', 'fromLumenId', 'fromName',
+          'toUid', 'toLumenId', 'toName',
+          'status', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.fromUid) &&
+        isValidLumenId(data.fromLumenId) &&
+        data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 80 &&
+        isValidId(data.toUid) &&
+        isValidLumenId(data.toLumenId) &&
+        data.toName is string && data.toName.size() >= 1 && data.toName.size() <= 80 &&
+        data.status is string && data.status in ['pending', 'accepted', 'declined'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: Conversation (supports linking two user IDs & real-time typing indicator)
+    function isValidConversation(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'handle', 'role', 'isGroup', 'memberCount',
+          'pinned', 'unread', 'pinnedMsgId', 'lastMessageText', 'lastMessageTime',
+          'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'participantIds', 'participantLumenIds', 'peerUserId', 'peerLumenId',
+          'name', 'handle', 'role', 'isGroup', 'memberCount',
+          'pinned', 'unread', 'pinnedMsgId', 'lastMessageText', 'lastMessageTime',
+          'typingUserId', 'typingUserName',
+          'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerId) &&
+        (
+          data.ownerId == request.auth.uid ||
+          ('participantIds' in data && data.participantIds is list && request.auth.uid in data.participantIds)
+        ) &&
+        (
+          !('participantIds' in data) ||
+          (
+            data.participantIds is list &&
+            data.participantIds.size() >= 1 &&
+            data.participantIds.size() <= 2 &&
+            isValidId(data.participantIds[0]) &&
+            request.auth.uid in data.participantIds
+          )
+        ) &&
+        (
+          !('participantLumenIds' in data) ||
+          (
+            data.participantLumenIds is list &&
+            data.participantLumenIds.size() >= 1 &&
+            data.participantLumenIds.size() <= 2 &&
+            isValidLumenId(data.participantLumenIds[0])
+          )
+        ) &&
+        (!('peerUserId' in data) || isValidId(data.peerUserId)) &&
+        (!('peerLumenId' in data) || isValidLumenId(data.peerLumenId)) &&
+        (!('typingUserId' in data) || (data.typingUserId is string && data.typingUserId.size() <= 128)) &&
+        (!('typingUserName' in data) || (data.typingUserName is string && data.typingUserName.size() <= 80)) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+        data.handle is string && data.handle.size() >= 2 && data.handle.size() <= 60 &&
+        data.role is string && data.role.size() >= 1 && data.role.size() <= 60 &&
+        data.isGroup is bool &&
+        data.memberCount is int && data.memberCount >= 1 && data.memberCount <= 500 &&
+        data.pinned is bool &&
+        data.unread is int && data.unread >= 0 && data.unread <= 999 &&
+        data.pinnedMsgId is string && data.pinnedMsgId.size() <= 128 &&
+        data.lastMessageText is string && data.lastMessageText.size() <= 500 &&
+        data.lastMessageTime is string && data.lastMessageTime.size() <= 32 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: Message
+    function isValidMessage(data, conversationId) {
+      return data.keys().hasAll([
+          'ownerId', 'conversationId', 'senderName', 'me', 'kind', 'text',
+          'time', 'dateGroup', 'edited', 'replyToId', 'forwardedFrom', 'status',
+          'attachmentName', 'attachmentSize', 'attachmentUrl', 'attachmentIsImage',
+          'audioUrl', 'audioDuration', 'pollQuestion', 'pollOptions', 'pollVotes',
+          'reactions', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'conversationId', 'senderName', 'me', 'kind', 'text',
+          'time', 'dateGroup', 'edited', 'replyToId', 'forwardedFrom', 'status',
+          'attachmentName', 'attachmentSize', 'attachmentUrl', 'attachmentIsImage',
+          'audioUrl', 'audioDuration', 'pollQuestion', 'pollOptions', 'pollVotes',
+          'reactions', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        isValidId(data.conversationId) &&
+        data.conversationId == conversationId &&
+        data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 80 &&
+        data.me is bool &&
+        data.kind is string && data.kind in ['text', 'poll', 'attachment', 'voice'] &&
+        data.text is string && data.text.size() <= 2000 &&
+        data.time is string && data.time.size() >= 1 && data.time.size() <= 32 &&
+        data.dateGroup is string && data.dateGroup.size() >= 1 && data.dateGroup.size() <= 32 &&
+        data.edited is bool &&
+        data.replyToId is string && data.replyToId.size() <= 128 &&
+        data.forwardedFrom is string && data.forwardedFrom.size() <= 80 &&
+        data.status is string && data.status in ['sent', 'read'] &&
+        data.attachmentName is string && data.attachmentName.size() <= 200 &&
+        data.attachmentSize is string && data.attachmentSize.size() <= 40 &&
+        data.attachmentUrl is string && data.attachmentUrl.size() <= 500000 &&
+        data.attachmentIsImage is bool &&
+        data.audioUrl is string && data.audioUrl.size() <= 500000 &&
+        data.audioDuration is int && data.audioDuration >= 0 && data.audioDuration <= 600 &&
+        data.pollQuestion is string && data.pollQuestion.size() <= 300 &&
+        data.pollOptions is list && data.pollOptions.size() <= 4 &&
+        (data.pollOptions.size() == 0 || (data.pollOptions[0] is string && data.pollOptions[0].size() <= 120)) &&
+        data.pollVotes is list && data.pollVotes.size() <= 4 &&
+        (data.pollVotes.size() == 0 || (data.pollVotes[0] is string && data.pollVotes[0].size() <= 120)) &&
+        data.reactions is list && data.reactions.size() <= 13 &&
+        (data.reactions.size() == 0 || (data.reactions[0] is string && data.reactions[0].size() <= 16)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Collection 1: /users/{userId}
+    match /users/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (isOwner(userId) || existing().searchable == true);
+      allow list: if isVerified() && (existing().uid == request.auth.uid || existing().searchable == true);
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'lumenId', 'displayName', 'displayNameLower', 'email', 'photoURL', 'searchable', 'theme', 'blur', 'updatedAt'
+        ]);
+      allow delete: if isOwner(userId) && isValidId(userId);
+    }
+
+    // Collection 2: /userDirectory/{lumenId} (Non-PII lookup by Lumen ID & real-time typing status)
+    match /userDirectory/{lumenId} {
+      allow get: if isVerified() && isValidLumenId(lumenId);
+      allow list: if isVerified() && existing().lumenId is string;
+      allow create: if isVerified() &&
+        isValidLumenId(lumenId) &&
+        isValidUserDirectoryEntry(incoming(), lumenId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() &&
+        isValidLumenId(lumenId) &&
+        isValidUserDirectoryEntry(incoming(), lumenId) &&
+        existing().uid == request.auth.uid &&
+        incoming().uid == existing().uid &&
+        incoming().lumenId == existing().lumenId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'handle', 'typingToLumenId', 'typingFromName', 'updatedAt'
+        ]);
+      allow delete: if isVerified() && isValidLumenId(lumenId) && existing().uid == request.auth.uid;
+    }
+
+    // Collection 3: /friendRequests/{requestId} (Friend requests by Lumen ID)
+    match /friendRequests/{requestId} {
+      allow get: if isVerified() &&
+        isValidId(requestId) &&
+        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+      allow list: if isVerified() &&
+        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+      allow create: if isVerified() &&
+        isValidId(requestId) &&
+        isValidFriendRequest(incoming()) &&
+        incoming().fromUid == request.auth.uid &&
+        incoming().status == 'pending' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() &&
+        isValidId(requestId) &&
+        isValidFriendRequest(incoming()) &&
+        existing().status == 'pending' &&
+        incoming().fromUid == existing().fromUid &&
+        incoming().fromLumenId == existing().fromLumenId &&
+        incoming().fromName == existing().fromName &&
+        incoming().toUid == existing().toUid &&
+        incoming().toLumenId == existing().toLumenId &&
+        incoming().toName == existing().toName &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (existing().toUid == request.auth.uid || existing().fromUid == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if isVerified() &&
+        isValidId(requestId) &&
+        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+    }
+
+    // Collection 4: /conversations/{conversationId}
+    match /conversations/{conversationId} {
+      allow get: if isVerified() &&
+        isValidId(conversationId) &&
+        (
+          existing().ownerId == request.auth.uid ||
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+        );
+      allow list: if isVerified() &&
+        (
+          existing().ownerId == request.auth.uid ||
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+        );
+      allow create: if isVerified() &&
+        isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isVerified() &&
+        isValidId(conversationId) &&
+        isValidConversation(incoming()) &&
+        (
+          existing().ownerId == request.auth.uid ||
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+        ) &&
+        incoming().ownerId == existing().ownerId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action 1: Update pin / unread / pinned message state
+          incoming().diff(existing()).affectedKeys().hasOnly(['pinned', 'unread', 'pinnedMsgId', 'updatedAt']) ||
+          // Action 2: Update last message preview & metadata (and clear typing state)
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'lastMessageText', 'lastMessageTime', 'unread', 'typingUserId', 'typingUserName', 'updatedAt'
+          ]) ||
+          // Action 3: Rename or update conversation details / linked participant IDs
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'handle', 'role', 'memberCount',
+            'participantIds', 'participantLumenIds', 'peerUserId', 'peerLumenId', 'updatedAt'
+          ]) ||
+          // Action 4: Real-time typing indicator update
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'typingUserId', 'typingUserName', 'updatedAt'
+          ])
+        );
+      allow delete: if isVerified() &&
+        isValidId(conversationId) &&
+        (
+          existing().ownerId == request.auth.uid ||
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+        );
+
+      // Subcollection 5: /conversations/{conversationId}/messages/{messageId}
+      match /messages/{messageId} {
+        allow get: if isVerified() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isConversationMember(conversationId);
+        allow list: if isVerified() &&
+          (existing().ownerId == request.auth.uid || existing().conversationId == conversationId);
+        allow create: if isVerified() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isValidMessage(incoming(), conversationId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          isConversationMember(conversationId);
+        allow update: if isVerified() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isValidMessage(incoming(), conversationId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().conversationId == existing().conversationId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          isConversationMember(conversationId) && (
+            // Action 1: Edit message text
+            (incoming().edited == true && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'edited', 'updatedAt'])) ||
+            // Action 2: Toggle emoji reactions
+            incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']) ||
+            // Action 3: Vote on a poll
+            incoming().diff(existing()).affectedKeys().hasOnly(['pollVotes', 'updatedAt']) ||
+            // Action 4: Update delivery status
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          );
+        allow delete: if isVerified() &&
+          isValidId(conversationId) &&
+          isValidId(messageId) &&
+          isConversationMember(conversationId);
+      }
+    }
+
+    // Collection 6: /calls/{callId} (Live WebRTC Audio & Video Calling signaling)
+    match /calls/{callId} {
+      allow get, list, create, update, delete: if isSignedIn();
+
+      match /callerCandidates/{candidateId} {
+        allow read, write: if isSignedIn();
+      }
+      match /calleeCandidates/{candidateId} {
+        allow read, write: if isSignedIn();
+      }
+    }
+  }
+}
