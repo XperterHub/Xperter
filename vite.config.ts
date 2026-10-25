@@ -20,6 +20,9 @@ export default defineConfig({
   },
   vite: {
     base: isPages ? "/Xperter/" : "/",
+    define: {
+      "process.env.TSS_ROUTER_BASEPATH": JSON.stringify(isPages ? "/Xperter" : ""),
+    },
     optimizeDeps: {
       include: [
         "use-sync-external-store/shim/with-selector",

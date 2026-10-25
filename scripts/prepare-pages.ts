@@ -2,54 +2,85 @@ import fs from "node:fs";
 import path from "node:path";
 
 const publicDir = path.resolve(".output/public");
-const assetsDir = path.join(publicDir, "assets");
-
-if (!fs.existsSync(assetsDir)) {
-  console.error("Assets directory not found:", assetsDir);
-  process.exit(1);
-}
-
-const files = fs.readdirSync(assetsDir);
-const cssFile = files.find((f) => f.startsWith("styles-") && f.endsWith(".css"));
-const jsFile = files.find((f) => f.startsWith("index-") && f.endsWith(".js"));
-
-if (!cssFile || !jsFile) {
-  console.warn("Could not find styles-*.css or index-*.js in assets", files);
-}
-
-// GitHub Pages base path
+const serverFile = path.resolve(".output/server/index.mjs");
 const basePath = "/Xperter";
 
-const htmlContent = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Lumen — Chrome & glass communication</title>
-    <link rel="icon" href="${basePath}/favicon.ico" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Big+Shoulders+Display:wght@800;900&family=Geist:wght@200..600&display=swap" />
-    ${cssFile ? `<link rel="stylesheet" href="${basePath}/assets/${cssFile}" />` : ""}
-    <script>
-      // Single Page App redirect handling for GitHub Pages
-      (function() {
-        var redirect = sessionStorage.redirect;
-        delete sessionStorage.redirect;
-        if (redirect && redirect != location.href) {
-          history.replaceState(null, null, redirect);
-        }
-      })();
-    </script>
-  </head>
-  <body>
-    ${jsFile ? `<script type="module" src="${basePath}/assets/${jsFile}"></script>` : ""}
-  </body>
-</html>
-`;
+async function main() {
+  if (!fs.existsSync(publicDir)) {
+    console.error("Public directory not found:", publicDir);
+    process.exit(1);
+  }
 
-// 404.html script that captures route and redirects to index.html for SPA router
-const notFoundHtml = `<!DOCTYPE html>
+  if (!fs.existsSync(serverFile)) {
+    console.error("Server build not found at:", serverFile);
+    process.exit(1);
+  }
+
+  console.log("Loading Nitro SSR server...");
+  const serverModule = await import(serverFile);
+  const server = serverModule.default || serverModule;
+
+  const routes = [
+    { route: "/", targets: ["index.html"] },
+    { route: "/sign-in", targets: ["sign-in.html", "sign-in/index.html"] },
+    { route: "/sign-up", targets: ["sign-up.html", "sign-up/index.html"] },
+    { route: "/welcome", targets: ["welcome.html", "welcome/index.html"] },
+    { route: "/forgot-password", targets: ["forgot-password.html", "forgot-password/index.html"] },
+    { route: "/app/page-2", targets: ["app/page-2/index.html"] },
+    { route: "/app/messages", targets: ["app/messages/index.html"] },
+  ];
+
+  for (const item of routes) {
+    try {
+      console.log(`Prerendering route: ${item.route}`);
+      const res = await server.fetch(
+        new Request(`http://localhost${item.route}`),
+        {},
+        { waitUntil: () => {} }
+      );
+
+      let html = await res.text();
+      if (!html || res.status !== 200) {
+        console.warn(`Route ${item.route} returned status ${res.status}`);
+        continue;
+      }
+
+      // Rewrite absolute asset paths to base path
+      html = html.split('"/assets/').join(`"${basePath}/assets/`);
+      html = html.split("'/assets/").join(`'${basePath}/assets/`);
+      html = html.split('"/favicon.ico').join(`"${basePath}/favicon.ico`);
+      html = html.split('"/glyphs/').join(`"${basePath}/glyphs/`);
+      html = html.split('"/xperter-logo.svg').join(`"${basePath}/xperter-logo.svg`);
+      html = html.split('"/robots.txt').join(`"${basePath}/robots.txt`);
+
+      // Inject SPA redirect recovery snippet into head
+      const spaRedirectScript = `<script>
+        (function() {
+          var redirect = sessionStorage.redirect;
+          delete sessionStorage.redirect;
+          if (redirect && redirect != location.href) {
+            history.replaceState(null, null, redirect);
+          }
+        })();
+      </script>`;
+
+      if (html.includes("<head>")) {
+        html = html.replace("<head>", `<head>${spaRedirectScript}`);
+      }
+
+      for (const target of item.targets) {
+        const dest = path.join(publicDir, target);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, html);
+        console.log(`  -> Wrote ${target} (${html.length} bytes)`);
+      }
+    } catch (err) {
+      console.error(`Failed to prerender ${item.route}:`, err);
+    }
+  }
+
+  // 404.html script that captures route and redirects to index.html for SPA router
+  const notFoundHtml = `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
@@ -65,8 +96,13 @@ const notFoundHtml = `<!DOCTYPE html>
 </html>
 `;
 
-fs.writeFileSync(path.join(publicDir, "index.html"), htmlContent);
-fs.writeFileSync(path.join(publicDir, "404.html"), notFoundHtml);
-fs.writeFileSync(path.join(publicDir, ".nojekyll"), "");
+  fs.writeFileSync(path.join(publicDir, "404.html"), notFoundHtml);
+  fs.writeFileSync(path.join(publicDir, ".nojekyll"), "");
 
-console.log("Successfully prepared GitHub Pages static files (index.html, 404.html, .nojekyll) in .output/public");
+  console.log("Successfully prepared all static pages, 404.html, and .nojekyll in .output/public!");
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
