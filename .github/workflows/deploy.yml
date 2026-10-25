@@ -37,10 +37,9 @@ jobs:
         run: bun test src/test/profile-vault-inbox.test.ts
 
       - name: Build for Firebase Hosting
-        if: env.FIREBASE_KEY != '' || env.FB_TOKEN != ''
+        if: env.FIREBASE_KEY != ''
         env:
           FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
-          FB_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
           NODE_ENV: production
           GITHUB_PAGES: "false"
           BASE_PATH: ""
@@ -49,21 +48,11 @@ jobs:
           bun run scripts/prepare-pages.ts
 
       - name: Deploy to Firebase Hosting (Live)
-        uses: FirebaseExtended/action-hosting-deploy@v0
         if: env.FIREBASE_KEY != ''
         env:
           FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
-          channelId: live
-          projectId: gen-lang-client-0104750557
-
-      - name: Deploy to Firebase Hosting via Token
-        if: env.FB_TOKEN != ''
-        env:
-          FB_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: bun x firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}"
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
+        run: bun run scripts/deploy-firebase.ts
 
       - name: Build project for GitHub Pages
         run: |
