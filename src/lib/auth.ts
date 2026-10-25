@@ -141,7 +141,7 @@ export function getRememberedUsername(): string {
   }
 }
 
-function readClaimedUsernamesMap(): Record<string, string> {
+export function readClaimedUsernamesMap(): Record<string, string> {
   try {
     const raw = getLocalStorage().getItem(CLAIMED_USERNAMES_KEY);
     if (!raw) return {};
@@ -766,7 +766,6 @@ export async function updateUserProfile(updates: {
   if (auth.currentUser) {
     // If the user changed their unique lumenId, remove their old directory entry first
     if (
-      auth.currentUser.emailVerified &&
       previousLumenId &&
       previousLumenId !== nextLumenId
     ) {

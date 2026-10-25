@@ -86,14 +86,10 @@ export function normalizeLumenId(raw: string): string {
   if (upper.startsWith("LMN-")) {
     return upper.slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
   }
-  if (upper.startsWith("LMN") && upper.length > 3 && /^[A-Z0-9]+$/.test(upper.slice(3))) {
+  if (upper.startsWith("LMN") && upper.length > 3 && /^[A-Z0-9_-]+$/.test(upper.slice(3))) {
     return `LMN-${upper.slice(3)}`.slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
   }
-  // If user typed a customized username (e.g. nagaraj_98, arjun_dev), preserve lowercase custom ID
-  if (/[a-z_]/.test(trimmed)) {
-    return trimmed.toLowerCase().slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
-  }
-  return `LMN-${upper}`.slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
+  return trimmed.toLowerCase().slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
 }
 
 export enum OperationType {

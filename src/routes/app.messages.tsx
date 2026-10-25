@@ -1586,7 +1586,7 @@ function Messages() {
     if (!user) return;
     const targetLumenId = normalizeLumenId(friendTargetId);
     if (targetLumenId.length < 4) {
-      toast.error("Enter a valid User ID (e.g. LMN-7K4P9X)");
+      toast.error("Enter a valid User ID");
       return;
     }
     if (targetLumenId === user.lumenId) {
@@ -1602,18 +1602,27 @@ function Messages() {
 
     if (isCloud) {
       try {
-        const dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+        let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
+        }
+        if (!dirSnap.exists() && targetLumenId.startsWith("LMN-")) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
+        }
         if (dirSnap.exists()) {
           const dirData = dirSnap.data();
           if (typeof dirData.uid === "string" && dirData.uid) {
             resolvedToUid = sanitizeId(dirData.uid);
           }
-          if (!friendTargetName.trim() && typeof dirData.displayName === "string" && dirData.displayName) {
+          if (typeof dirData.displayName === "string" && dirData.displayName) {
             resolvedToName = dirData.displayName.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
           }
+        } else {
+          toast.error(`User ID "@${targetLumenId}" does not exist.`);
+          return;
         }
-      } catch {
-        // Fallback to entered ID & name if directory entry is not found yet
+      } catch (err) {
+        console.error("Directory lookup failed:", err);
       }
     }
 
@@ -1636,7 +1645,7 @@ function Messages() {
       };
       saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
       await ensureConversationWithFriend(targetLumenId, resolvedToName, resolvedToUid);
-      toast.success(`Added friend ${targetLumenId}`);
+      toast.success(`Added friend ${resolvedToName} (@${targetLumenId})`);
       return;
     }
 
@@ -1654,7 +1663,7 @@ function Messages() {
         updatedAt: serverTimestamp(),
       });
       await ensureConversationWithFriend(targetLumenId, resolvedToName, resolvedToUid);
-      toast.success(`Added friend ${targetLumenId}`);
+      toast.success(`Sent friend request to ${resolvedToName} (@${targetLumenId})`);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, reqPath);
     }
@@ -1664,25 +1673,34 @@ function Messages() {
     if (!user) return;
     const targetLumenId = normalizeLumenId(friendTargetId);
     if (targetLumenId.length < 4) {
-      toast.error("Enter a valid User ID (e.g. LMN-7K4P9X)");
+      toast.error("Enter a valid User ID");
       return;
     }
     let resolvedName = friendTargetName.trim() || `User ${targetLumenId}`;
     let resolvedUid = sanitizeId(`dir_${targetLumenId}`);
     if (isCloud) {
       try {
-        const dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+        let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
+        }
+        if (!dirSnap.exists() && targetLumenId.startsWith("LMN-")) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
+        }
         if (dirSnap.exists()) {
           const dirData = dirSnap.data();
           if (typeof dirData.uid === "string" && dirData.uid) {
             resolvedUid = sanitizeId(dirData.uid);
           }
-          if (!friendTargetName.trim() && typeof dirData.displayName === "string" && dirData.displayName) {
+          if (typeof dirData.displayName === "string" && dirData.displayName) {
             resolvedName = dirData.displayName;
           }
+        } else {
+          toast.error(`User ID "@${targetLumenId}" does not exist.`);
+          return;
         }
-      } catch {
-        // Ignore directory lookup error
+      } catch (err) {
+        console.error("Directory lookup failed:", err);
       }
     }
     setFriendTargetId("");
@@ -2375,9 +2393,9 @@ function Messages() {
                     value={friendTargetId}
                     onChange={(e) => setFriendTargetId(e.target.value)}
                     maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
-                    placeholder="Enter friend's User ID (e.g. LMN-7K4P9X)"
+                    placeholder="Enter friend's User ID"
                     required
-                    className="glass-input w-full rounded-xl px-3.5 py-2.5 font-mono text-xs uppercase outline-none placeholder:font-sans placeholder:normal-case placeholder:text-faint"
+                    className="glass-input w-full rounded-xl px-3.5 py-2.5 font-mono text-xs outline-none placeholder:font-sans placeholder:text-faint"
                   />
                   <button
                     type="submit"

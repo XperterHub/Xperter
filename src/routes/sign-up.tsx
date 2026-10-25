@@ -6,7 +6,6 @@ import { AuthLayout, Divider, Field, GoogleButton, InkButton } from "@/component
 import { UniqueUsernameField } from "@/components/auth/UniqueUsernameField";
 import {
   checkUsernameAvailability,
-  signIn,
   signUpWithEmailPassword,
   signInWithGoogle,
   type UsernameAvailabilityStatus,
@@ -107,13 +106,12 @@ function SignUp() {
       }
     } catch (err: any) {
       if (err?.code === "auth/unauthorized-domain") {
-        toast.info(
-          "Notice: 'nagarajps9894-sketch.github.io' can be authorized in Firebase Console > Authentication > Settings. Redirecting to setup.",
+        toast.error(
+          "Google sign-in is blocked: add 'nagarajps9894-sketch.github.io' to Firebase Console → Authentication → Settings → Authorized domains.",
+          { duration: 10000 },
         );
-        signIn(email || "google.user@gmail.com", name || "Google User", true);
-        nav({ to: "/sign-in" });
       } else {
-        toast.error(err?.message || "Google authentication could not be completed");
+        toast.error(err?.message || "Google authentication could not be completed.");
       }
     } finally {
       setLoading(false);

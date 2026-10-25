@@ -23,6 +23,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -456,15 +457,44 @@ export function WorkspaceInboxControl({
       return;
     }
 
+    let resolvedToUid = sanitizeId(`usr_${targetLumenId.toLowerCase()}`);
+    let resolvedToName = `User ${targetLumenId}`;
+
+    if (user?.isCloudUser) {
+      try {
+        let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
+        }
+        if (!dirSnap.exists() && targetLumenId.startsWith("LMN-")) {
+          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
+        }
+        if (dirSnap.exists()) {
+          const dirData = dirSnap.data();
+          if (typeof dirData.uid === "string" && dirData.uid) {
+            resolvedToUid = sanitizeId(dirData.uid);
+          }
+          if (typeof dirData.displayName === "string" && dirData.displayName) {
+            resolvedToName = dirData.displayName;
+          }
+        } else {
+          toast.error(`User ID "@${targetLumenId}" does not exist.`);
+          return;
+        }
+      } catch (err) {
+        console.error("Directory lookup failed:", err);
+      }
+    }
+
     const reqId = sanitizeId(`freq_${user?.uid || "local"}_${targetLumenId}_${Date.now()}`);
     const newReq: FriendReqRecord = {
       id: reqId,
       fromUid: user?.uid || "usr_me",
       fromLumenId: user?.lumenId || "lumen_user",
       fromName: user?.name || "Lumen User",
-      toUid: sanitizeId(`usr_${targetLumenId.toLowerCase()}`),
+      toUid: resolvedToUid,
       toLumenId: targetLumenId,
-      toName: `User ${targetLumenId}`,
+      toName: resolvedToName,
       status: "pending",
       createdAtMs: Date.now(),
     };
@@ -492,7 +522,7 @@ export function WorkspaceInboxControl({
     writeJson(LOCAL_FREQ_KEY, nextLocal);
     setFriendIdInput("");
     playNotificationChime(prefs);
-    toast.success(`Friend request sent to Unique ID ${targetLumenId}`);
+    toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
   };
 
   const handleAcceptRequest = async (req: FriendReqRecord) => {
@@ -777,7 +807,7 @@ export function WorkspaceInboxControl({
                 <input
                   value={friendIdInput}
                   onChange={(e) => setFriendIdInput(e.target.value)}
-                  placeholder="Add friend by Unique User ID (e.g. arjun_mehta or LMN-7K4P9X)…"
+                  placeholder="Add friend by Unique User ID…"
                   aria-label="Add friend by Unique User ID"
                   className="w-full bg-transparent font-mono text-xs outline-none placeholder:font-sans placeholder:text-faint"
                 />

@@ -15,7 +15,7 @@ export function UserSearchBar({
   currentUser,
   onStartChat,
   onSendFriendRequest,
-  placeholder = "Search users by display name or User ID (e.g. LMN-7K4P9X)…",
+  placeholder = "Search users by display name or User ID…",
   autoFocus = false,
 }: UserSearchBarProps) {
   const [queryText, setQueryText] = useState("");
@@ -145,9 +145,7 @@ export function UserSearchBar({
                           </span>
                         </div>
                         <p className="truncate text-[11px] text-muted-foreground">
-                          {item.isDirectIdMatch
-                            ? "Connect directly by User ID / Name"
-                            : `${item.handle} · Verified User`}
+                          {item.handle} · Verified User
                         </p>
                       </div>
                     </div>

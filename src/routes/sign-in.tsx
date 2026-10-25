@@ -8,7 +8,6 @@ import {
   checkUsernameAvailability,
   getRememberedEmail,
   getRememberMePreference,
-  signIn,
   signInWithEmailPassword,
   signInWithGoogle,
   updateUserProfile,
@@ -67,9 +66,11 @@ function SignIn() {
   useEffect(() => {
     if (!authReady || !user) return;
 
+    const hasCustomUsername = Boolean(user.lumenId && !user.lumenId.startsWith("LMN-"));
     const isConfirmed =
-      typeof window !== "undefined" &&
-      window.localStorage.getItem(`lumen.username.confirmed.${user.uid}`) === "true";
+      hasCustomUsername ||
+      (typeof window !== "undefined" &&
+        window.localStorage.getItem(`lumen.username.confirmed.${user.uid}`) === "true");
 
     if (!isConfirmed) {
       setPendingGoogleUser(user);
@@ -115,9 +116,9 @@ function SignIn() {
       const authedUser = await signInWithGoogle(remember);
       const defaultId = authedUser.email?.split("@")[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") || "user";
       const hasCustomId =
-        Boolean(authedUser.lumenId) &&
-        typeof window !== "undefined" &&
-        window.localStorage.getItem(`lumen.username.confirmed.${authedUser.uid}`) === "true";
+        Boolean(authedUser.lumenId && !authedUser.lumenId.startsWith("LMN-")) ||
+        (typeof window !== "undefined" &&
+          window.localStorage.getItem(`lumen.username.confirmed.${authedUser.uid}`) === "true");
 
       if (hasCustomId) {
         toast.success("Signed in with Google");
@@ -129,18 +130,16 @@ function SignIn() {
     } catch (err: any) {
       console.error("Google sign-in error:", err);
       if (err?.code === "auth/unauthorized-domain") {
-        toast.info(
-          "Notice: 'nagarajps9894-sketch.github.io' can be authorized in Firebase Console > Authentication > Settings. Testing with Google account fallback.",
+        toast.error(
+          "Google sign-in is blocked: this domain is not authorized in Firebase Console. Go to Firebase Console → Authentication → Settings → Authorized domains and add 'nagarajps9894-sketch.github.io'.",
+          { duration: 10000 },
         );
-        const demoUser = signIn(email || "google.user@gmail.com", "Google User", remember);
-        setPendingGoogleUser(demoUser);
-        setGoogleUsername(demoUser.lumenId || "google_user");
       } else if (err?.code === "auth/popup-blocked") {
         toast.error("Popup was blocked by your browser. Please allow popups for Google sign-in.");
       } else if (err?.code === "auth/popup-closed-by-user") {
-        toast.info("Google sign-in was cancelled");
+        toast.info("Google sign-in was cancelled.");
       } else {
-        toast.error(err?.message || "Google sign-in could not be completed");
+        toast.error(err?.message || "Google sign-in could not be completed.");
       }
     } finally {
       setLoading(false);

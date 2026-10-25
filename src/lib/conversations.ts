@@ -9,11 +9,11 @@ import {
   setDoc,
   where,
 } from "firebase/firestore";
-import type { AppUser } from "@/lib/auth";
+import { type AppUser, readClaimedUsernamesMap } from "@/lib/auth";
 import {
+  auth,
   BLUEPRINT_LIMITS,
   db,
-  deriveLumenId,
   handleFirestoreError,
   normalizeLumenId,
   OperationType,
@@ -90,11 +90,19 @@ export async function searchUsersInFirestore(
     }
   };
 
-  if (currentUser?.isCloudUser) {
+  const isCloud = Boolean(currentUser?.isCloudUser || auth.currentUser);
+
+  if (isCloud) {
     // 1. Direct lookup by unique User ID in userDirectory/{lumenId}
-    if (normalizedId.length >= 4) {
+    if (normalizedId.length >= 3) {
       try {
-        const dirSnap = await getDoc(doc(db, "userDirectory", normalizedId));
+        let dirSnap = await getDoc(doc(db, "userDirectory", normalizedId));
+        if (!dirSnap.exists() && normalizedId !== normalizedId.toLowerCase()) {
+          dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toLowerCase()));
+        }
+        if (!dirSnap.exists() && normalizedId.startsWith("LMN-")) {
+          dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toUpperCase()));
+        }
         if (dirSnap.exists()) {
           const d = dirSnap.data();
           const uid = sanitizeId(String(d.uid ?? `usr_${normalizedId}`));
@@ -127,7 +135,7 @@ export async function searchUsersInFirestore(
       for (const docSnap of usersSnap.docs) {
         const d = docSnap.data();
         const uid = sanitizeId(String(d.uid ?? docSnap.id));
-        const lumenId = String(d.lumenId ?? deriveLumenId(uid));
+        const lumenId = String(d.lumenId ?? uid);
         const displayName = String(d.displayName ?? "User");
         const displayNameLower = String(d.displayNameLower ?? displayName.toLowerCase());
         const photoURL = typeof d.photoURL === "string" ? d.photoURL : "";
@@ -138,7 +146,7 @@ export async function searchUsersInFirestore(
           displayNameLower.includes(lower) || handle.toLowerCase().includes(lower);
         const matchesId =
           lumenId.toLowerCase().includes(lower) ||
-          lumenId.toUpperCase() === normalizedId ||
+          lumenId.toLowerCase() === normalizedId.toLowerCase() ||
           uid.toLowerCase().includes(lower);
 
         if (matchesName || matchesId) {
@@ -164,11 +172,11 @@ export async function searchUsersInFirestore(
         const uid = sanitizeId(String(d.uid ?? docSnap.id));
         const lumenId = String(d.lumenId ?? docSnap.id);
         const displayName = String(d.displayName ?? "User");
-        const handle = String(d.handle ?? "@user");
+        const handle = String(d.handle ?? `@${lumenId.toLowerCase()}`);
         if (
           displayName.toLowerCase().includes(lower) ||
           lumenId.toLowerCase().includes(lower) ||
-          lumenId.toUpperCase() === normalizedId ||
+          lumenId.toLowerCase() === normalizedId.toLowerCase() ||
           handle.toLowerCase().includes(lower)
         ) {
           addCandidate({
@@ -182,40 +190,25 @@ export async function searchUsersInFirestore(
     } catch {
       // Ignore fallback error
     }
-  }
-
-  // 4. If the query looks like a User ID or display name and no exact match was found yet,
-  // provide a direct connectable entry so the user can initiate a conversation immediately.
-  const looksLikeLumenId =
-    /^lmn[-_]?[a-z0-9]{2,}$/i.test(trimmed) || /^[a-z0-9]{5,12}$/i.test(trimmed);
-  if (resultsById.size === 0 && trimmed.length >= 2) {
-    if (looksLikeLumenId) {
-      const targetLumenId = normalizedId.slice(0, BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH);
-      const syntheticUid = sanitizeId(`usr_${targetLumenId.toLowerCase()}`);
-      addCandidate({
-        uid: syntheticUid,
-        lumenId: targetLumenId,
-        displayName: `User ${targetLumenId}`,
-        handle: `@${targetLumenId.toLowerCase().replace(/[^a-z0-9_-]+/g, ".")}`,
-        isDirectIdMatch: true,
-      });
-    } else {
-      const cleanName = trimmed.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
-      const syntheticUid = sanitizeId(
-        `usr_${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
-      );
-      const targetLumenId = deriveLumenId(syntheticUid);
-      const handleBase = cleanName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, ".")
-        .replace(/^\.+|\.+$/g, "");
-      addCandidate({
-        uid: syntheticUid,
-        lumenId: targetLumenId,
-        displayName: cleanName,
-        handle: `@${handleBase || "user"}`.slice(0, BLUEPRINT_LIMITS.MAX_HANDLE_LENGTH),
-        isDirectIdMatch: true,
-      });
+  } else {
+    // Local / offline fallback: search locally claimed usernames
+    try {
+      const claimedMap = readClaimedUsernamesMap();
+      for (const [claimedId, ownerUid] of Object.entries(claimedMap)) {
+        if (
+          claimedId.toLowerCase().includes(lower) ||
+          claimedId.toLowerCase() === normalizedId.toLowerCase()
+        ) {
+          addCandidate({
+            uid: ownerUid,
+            lumenId: claimedId,
+            displayName: `User ${claimedId}`,
+            handle: `@${claimedId.toLowerCase()}`,
+          });
+        }
+      }
+    } catch {
+      // Ignore local storage error
     }
   }
 
