@@ -36,13 +36,17 @@ jobs:
       - name: Run automated test suite
         run: bun test src/test/profile-vault-inbox.test.ts
 
-      - name: Build project
+      - name: Build for Firebase Hosting
+        if: env.FIREBASE_KEY != '' || env.FB_TOKEN != ''
+        env:
+          FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
+          FB_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          NODE_ENV: production
+          GITHUB_PAGES: "false"
+          BASE_PATH: ""
         run: |
           bun run build
           bun run scripts/prepare-pages.ts
-        env:
-          NODE_ENV: production
-          GITHUB_PAGES: "true"
 
       - name: Deploy to Firebase Hosting (Live)
         uses: FirebaseExtended/action-hosting-deploy@v0
@@ -60,6 +64,15 @@ jobs:
         env:
           FB_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: bun x firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}"
+
+      - name: Build project for GitHub Pages
+        run: |
+          bun run build
+          bun run scripts/prepare-pages.ts
+        env:
+          NODE_ENV: production
+          GITHUB_PAGES: "true"
+          BASE_PATH: "/Xperter"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

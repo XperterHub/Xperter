@@ -3,7 +3,7 @@ import path from "node:path";
 
 const publicDir = path.resolve(".output/public");
 const serverFile = path.resolve(".output/server/index.mjs");
-const basePath = "/Xperter";
+const basePath = process.env.BASE_PATH !== undefined ? process.env.BASE_PATH : (process.env.GITHUB_PAGES === "true" ? "/Xperter" : "");
 
 async function main() {
   if (!fs.existsSync(publicDir)) {
@@ -94,10 +94,10 @@ async function main() {
     <script>
       sessionStorage.redirect = location.href;
     </script>
-    <meta http-equiv="refresh" content="0;URL='${basePath}/'" />
+    <meta http-equiv="refresh" content="0;URL='${basePath ? `${basePath}/` : "/"}'" />
   </head>
   <body>
-    <p>Redirecting to <a href="${basePath}/">${basePath}/</a>...</p>
+    <p>Redirecting to <a href="${basePath ? `${basePath}/` : "/"}">${basePath ? `${basePath}/` : "/"}</a>...</p>
   </body>
 </html>
 `;
