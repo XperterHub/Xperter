@@ -33,11 +33,17 @@ async function main() {
   for (const item of routes) {
     try {
       console.log(`Prerendering route: ${item.route}`);
-      const res = await server.fetch(
-        new Request(`http://localhost${item.route}`),
-        {},
-        { waitUntil: () => {} }
-      );
+      let currentUrl = `http://localhost${item.route}`;
+      let res = await server.fetch(new Request(currentUrl), {}, { waitUntil: () => {} });
+      let redirects = 0;
+      while ((res.status === 301 || res.status === 302 || res.status === 307 || res.status === 308) && redirects < 5) {
+        const loc = res.headers.get("location");
+        if (!loc) break;
+        currentUrl = new URL(loc, currentUrl).toString();
+        console.log(`  -> Followed redirect to: ${currentUrl}`);
+        res = await server.fetch(new Request(currentUrl), {}, { waitUntil: () => {} });
+        redirects++;
+      }
 
       let html = await res.text();
       if (!html || res.status !== 200) {

@@ -2,7 +2,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
-const basepath = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+const isBrowser = typeof window !== "undefined";
+const basepath = isBrowser && window.location.pathname.startsWith("/Xperter") ? "/Xperter" : undefined;
 
 export const getRouter = () => {
   const queryClient = new QueryClient();
