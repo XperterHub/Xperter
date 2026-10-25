@@ -44,6 +44,19 @@ jobs:
           NODE_ENV: production
           GITHUB_PAGES: "true"
 
+      - name: Deploy to Firebase Hosting (Live)
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        if: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 != '' || secrets.FIREBASE_SERVICE_ACCOUNT != '' }}
+        with:
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 || secrets.FIREBASE_SERVICE_ACCOUNT }}'
+          channelId: live
+          projectId: gen-lang-client-0104750557
+
+      - name: Deploy to Firebase Hosting via Token
+        if: ${{ (secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 == '' && secrets.FIREBASE_SERVICE_ACCOUNT == '') && secrets.FIREBASE_TOKEN != '' }}
+        run: npx firebase-tools deploy --only hosting --token "${{ secrets.FIREBASE_TOKEN }}"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
