@@ -74,6 +74,7 @@ export async function searchUsersInFirestore(
   if (!trimmed) return [];
 
   const lower = trimmed.toLowerCase();
+  const queryClean = lower.replace(/^@+/, "");
   const normalizedId = normalizeLumenId(trimmed);
   const resultsById = new Map<string, DirectoryUser>();
 
@@ -143,9 +144,13 @@ export async function searchUsersInFirestore(
         const handle = `@${handleBase || "user"}`.slice(0, BLUEPRINT_LIMITS.MAX_HANDLE_LENGTH);
 
         const matchesName =
-          displayNameLower.includes(lower) || handle.toLowerCase().includes(lower);
+          displayNameLower.includes(lower) ||
+          displayNameLower.includes(queryClean) ||
+          handle.toLowerCase().includes(lower) ||
+          handle.toLowerCase().includes(queryClean);
         const matchesId =
           lumenId.toLowerCase().includes(lower) ||
+          lumenId.toLowerCase().includes(queryClean) ||
           lumenId.toLowerCase() === normalizedId.toLowerCase() ||
           uid.toLowerCase().includes(lower);
 
@@ -175,9 +180,12 @@ export async function searchUsersInFirestore(
         const handle = String(d.handle ?? `@${lumenId.toLowerCase()}`);
         if (
           displayName.toLowerCase().includes(lower) ||
+          displayName.toLowerCase().includes(queryClean) ||
           lumenId.toLowerCase().includes(lower) ||
+          lumenId.toLowerCase().includes(queryClean) ||
           lumenId.toLowerCase() === normalizedId.toLowerCase() ||
-          handle.toLowerCase().includes(lower)
+          handle.toLowerCase().includes(lower) ||
+          handle.toLowerCase().includes(queryClean)
         ) {
           addCandidate({
             uid,
@@ -197,6 +205,7 @@ export async function searchUsersInFirestore(
       for (const [claimedId, ownerUid] of Object.entries(claimedMap)) {
         if (
           claimedId.toLowerCase().includes(lower) ||
+          claimedId.toLowerCase().includes(queryClean) ||
           claimedId.toLowerCase() === normalizedId.toLowerCase()
         ) {
           addCandidate({

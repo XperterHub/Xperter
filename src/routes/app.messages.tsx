@@ -26,6 +26,7 @@ import {
   Info,
   MinusCircle,
   XCircle,
+  Loader2,
 } from "lucide-react";
 import {
   buildAnnouncementItem,
@@ -57,6 +58,7 @@ import {
 import { signInWithGoogle, useAuthState } from "@/lib/auth";
 import {
   createConversationBetweenUsers,
+  searchUsersInFirestore,
   type DirectoryUser,
 } from "@/lib/conversations";
 import {
@@ -510,13 +512,15 @@ function Messages() {
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newChatMode, setNewChatMode] = useState<"menu" | "friend" | "direct" | "group" | "announcement">("menu");
-  const [popupSearch, setPopupSearch] = useState("");
   const [newChatName, setNewChatName] = useState("");
   const [newChatRole, setNewChatRole] = useState("");
   const [newChatIsGroup, setNewChatIsGroup] = useState(false);
   const [friendTargetId, setFriendTargetId] = useState("");
   const [friendTargetName, setFriendTargetName] = useState("");
   const [friendRequests, setFriendRequests] = useState<FriendRequestItem[]>([]);
+  const [isSearchingLive, setIsSearchingLive] = useState(false);
+  const [liveUserResults, setLiveUserResults] = useState<DirectoryUser[]>([]);
+  const [sentRequestMap, setSentRequestMap] = useState<Record<string, boolean>>({});
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementCategory, setAnnouncementCategory] = useState<AnnouncementCategory>("update");
   const [announcementSummary, setAnnouncementSummary] = useState("");
@@ -535,11 +539,59 @@ function Messages() {
       }
       if (!nextOpen) {
         setNewChatMode("menu");
-        setPopupSearch("");
+        setFriendTargetId("");
+        setLiveUserResults([]);
       }
       return nextOpen;
     });
   };
+
+  // Live user directory search (Instagram-style live lookup)
+  useEffect(() => {
+    const trimmed = friendTargetId.trim();
+    if (!trimmed || newChatMode !== "friend") {
+      setLiveUserResults([]);
+      setIsSearchingLive(false);
+      return;
+    }
+
+    setIsSearchingLive(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchUsersInFirestore(trimmed, user);
+        const queryClean = trimmed.toLowerCase().replace(/^@+/, "");
+        const contactMatches: DirectoryUser[] = contacts
+          .filter(
+            (c) =>
+              !c.isGroup &&
+              (c.name.toLowerCase().includes(queryClean) ||
+                c.handle.toLowerCase().includes(queryClean) ||
+                (c.peerLumenId && c.peerLumenId.toLowerCase().includes(queryClean))),
+          )
+          .map((c) => ({
+            uid: c.peerUserId || c.id,
+            lumenId: c.peerLumenId || c.id,
+            displayName: c.name,
+            handle: c.handle,
+            photoURL: "",
+          }));
+
+        const map = new Map<string, DirectoryUser>();
+        for (const u of [...results, ...contactMatches]) {
+          if (u.lumenId === user?.lumenId || u.uid === user?.uid) continue;
+          const key = normalizeLumenId(u.lumenId) || u.uid;
+          if (!map.has(key)) map.set(key, u);
+        }
+        setLiveUserResults(Array.from(map.values()));
+      } catch {
+        setLiveUserResults([]);
+      } finally {
+        setIsSearchingLive(false);
+      }
+    }, 180);
+
+    return () => clearTimeout(timer);
+  }, [friendTargetId, newChatMode, user, contacts]);
 
   const handlePublishAnnouncementFromPopup = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1614,8 +1666,54 @@ function Messages() {
     }
   };
 
-  const handleSendFriendRequest = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const getFriendshipStatus = (
+    target: DirectoryUser,
+  ): "self" | "connected" | "requested" | "incoming" | "none" => {
+    if (!user) return "none";
+    const normTarget = normalizeLumenId(target.lumenId);
+    if (user.lumenId === normTarget || user.uid === target.uid) return "self";
+
+    const isConnected = contacts.some(
+      (c) =>
+        !c.isGroup &&
+        (c.participantLumenIds?.some((l) => normalizeLumenId(l) === normTarget) ||
+          normalizeLumenId(c.peerLumenId || "") === normTarget ||
+          c.peerUserId === target.uid),
+    );
+    if (isConnected) return "connected";
+
+    if (sentRequestMap[normTarget] || sentRequestMap[target.lumenId]) return "requested";
+
+    const hasOutgoing = friendRequests.some(
+      (r) =>
+        r.status === "pending" &&
+        r.fromUid === user.uid &&
+        (normalizeLumenId(r.toLumenId) === normTarget || r.toUid === target.uid),
+    );
+    if (hasOutgoing) return "requested";
+
+    const hasIncoming = friendRequests.some(
+      (r) =>
+        r.status === "pending" &&
+        (r.toUid === user.uid || normalizeLumenId(r.toLumenId) === user.lumenId) &&
+        (normalizeLumenId(r.fromLumenId) === normTarget || r.fromUid === target.uid),
+    );
+    if (hasIncoming) return "incoming";
+
+    return "none";
+  };
+
+  const handleSendFriendRequestToLiveUser = async (target: DirectoryUser) => {
+    if (!user) return;
+    const normTarget = normalizeLumenId(target.lumenId);
+    setSentRequestMap((prev) => ({ ...prev, [normTarget]: true, [target.lumenId]: true }));
+    triggerSettingsHaptic(true);
+    playSettingsLiquidSound(true);
+    await handleQuickFriendRequest(target);
+  };
+
+  const handleSendFriendRequest = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!user) return;
     const targetLumenId = normalizeLumenId(friendTargetId);
     if (targetLumenId.length < 4) {
@@ -2182,18 +2280,6 @@ function Messages() {
 
   const isGroupPopover = folder === "groups" || newChatMode === "group";
 
-  const popupMatchingContacts = useMemo(() => {
-    const q = popupSearch.trim().toLowerCase();
-    if (!q) return [];
-    return contacts.filter((c) => {
-      return (
-        c.name.toLowerCase().includes(q) ||
-        c.handle.toLowerCase().includes(q) ||
-        (c.peerLumenId && c.peerLumenId.toLowerCase().includes(q))
-      );
-    });
-  }, [popupSearch, contacts]);
-
   return (
     <div
       onClick={() => {
@@ -2395,7 +2481,7 @@ function Messages() {
                         New conversation
                       </RadixDialog.Title>
                       <RadixDialog.Description id="new-chat-dialog-desc" className="mt-1 text-xs text-muted-foreground sm:text-sm">
-                        Search contacts or choose an action below to start collaborating
+                        Choose an action below to start collaborating
                       </RadixDialog.Description>
                     </div>
                     <RadixDialog.Close asChild>
@@ -2410,115 +2496,68 @@ function Messages() {
                     </RadixDialog.Close>
                   </div>
 
-                  {/* Big Search Bar - matches Screenshot 4 */}
-                  <div className="relative mt-5 mb-4">
-                    <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-400" />
-                    <input
-                      value={popupSearch}
-                      onChange={(e) => setPopupSearch(e.target.value)}
-                      placeholder="Search name, number or @username"
-                      aria-label="Search name, number or @username"
-                      className="glass-input h-12 w-full rounded-2xl pl-11 pr-10 text-sm text-foreground outline-none ring-1 ring-emerald-500/35 transition-all focus:ring-emerald-500/80 placeholder:text-muted-foreground/60 shadow-inner"
-                    />
-                    {popupSearch && (
-                      <button
-                        type="button"
-                        onClick={() => setPopupSearch("")}
-                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    )}
+                  {/* Big Action Cards with custom emerald icons */}
+                  <div className="space-y-3 pt-5">
+                    <button
+                      type="button"
+                      onClick={() => setNewChatMode("group")}
+                      className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
+                    >
+                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                        <Users className="h-6 w-6" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-base font-semibold text-foreground">New group</p>
+                        <p className="text-xs text-muted-foreground sm:text-sm">Create a multi-member chat with team members</p>
+                      </div>
+                      <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNewChatMode("friend")}
+                      className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
+                    >
+                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                        <UserPlus className="h-6 w-6" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-base font-semibold text-foreground">New contact</p>
+                        <p className="text-xs text-muted-foreground sm:text-sm">Add friend by Unique User ID (@LMN-...)</p>
+                      </div>
+                      <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNewChatMode("announcement")}
+                      className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
+                    >
+                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                        <Megaphone className="h-6 w-6" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-base font-semibold text-foreground">New announcement</p>
+                        <p className="text-xs text-muted-foreground sm:text-sm">Broadcast updates and notices to the workspace</p>
+                      </div>
+                      <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
+                    </button>
                   </div>
-
-                  {/* Search Results (if typing in search) */}
-                  {popupSearch.trim().length > 0 ? (
-                    <div className="glass-scroll max-h-[46vh] space-y-1.5 overflow-y-auto pr-1">
-                      {popupMatchingContacts.length === 0 ? (
-                        <div className="py-12 text-center text-sm text-muted-foreground">
-                          No matching contacts found for "{popupSearch}"
-                        </div>
-                      ) : (
-                        popupMatchingContacts.map((contact) => (
-                          <button
-                            key={contact.id}
-                            type="button"
-                            onClick={() => {
-                              selectChat(contact.id);
-                              handleNewChatOpenChange(false);
-                            }}
-                            className="flex w-full items-center gap-3.5 rounded-2xl p-3 text-left transition-colors hover:bg-foreground/5 border border-transparent hover:border-glass-edge"
-                          >
-                            <Avatar name={contact.name} online={resolveContactOnline(contact)} isGroup={contact.isGroup} />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-medium text-foreground">{contact.name}</p>
-                              <p className="truncate font-mono text-xs text-muted-foreground">{contact.handle}</p>
-                            </div>
-                            <span className="btn-ink rounded-full px-3 py-1 text-xs font-medium">Chat</span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  ) : (
-                    /* Big Action Cards matching Screenshot 4 with custom emerald icons */
-                    <div className="space-y-3 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => setNewChatMode("group")}
-                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
-                      >
-                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
-                          <Users className="h-6 w-6" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-base font-semibold text-foreground">New group</p>
-                          <p className="text-xs text-muted-foreground sm:text-sm">Create a multi-member chat with team members</p>
-                        </div>
-                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setNewChatMode("friend")}
-                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
-                      >
-                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
-                          <UserPlus className="h-6 w-6" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-base font-semibold text-foreground">New contact</p>
-                          <p className="text-xs text-muted-foreground sm:text-sm">Add friend by Unique User ID (@LMN-...)</p>
-                        </div>
-                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setNewChatMode("announcement")}
-                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
-                      >
-                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
-                          <Megaphone className="h-6 w-6" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-base font-semibold text-foreground">New announcement</p>
-                          <p className="text-xs text-muted-foreground sm:text-sm">Broadcast updates and notices to the workspace</p>
-                        </div>
-                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Big Add Friend Form */}
+              {/* Big Add Friend / Instagram Live User Search */}
               {newChatMode === "friend" && (
                 <div className="flex flex-col min-h-0">
                   <div className="flex items-center justify-between border-b border-glass-edge pb-4">
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
-                        onClick={() => setNewChatMode("menu")}
+                        onClick={() => {
+                          setFriendTargetId("");
+                          setLiveUserResults([]);
+                          setNewChatMode("menu");
+                        }}
                         aria-label="Back to menu"
                         className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                       >
@@ -2543,83 +2582,225 @@ function Messages() {
                     </RadixDialog.Close>
                   </div>
 
-                  <form onSubmit={handleSendFriendRequest} className="mt-6 space-y-4">
+                  <div className="mt-5 space-y-4">
                     <div>
                       <label className="block text-xs font-medium text-foreground mb-1.5">
                         Friend's User ID
                       </label>
-                      <input
-                        value={friendTargetId}
-                        onChange={(e) => setFriendTargetId(e.target.value)}
-                        maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
-                        placeholder="e.g. LMN-CYXEJ4 or username"
-                        required
-                        autoFocus
-                        className="glass-input h-12 w-full rounded-2xl px-4 font-mono text-sm outline-none placeholder:font-sans placeholder:text-muted-foreground/60 ring-1 ring-glass-edge focus:ring-primary"
-                      />
+                      <div className="relative">
+                        <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-400" />
+                        <input
+                          value={friendTargetId}
+                          onChange={(e) => setFriendTargetId(e.target.value)}
+                          maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
+                          placeholder="e.g. LMN-CYXEJ4 or username"
+                          aria-label="Friend's User ID or username"
+                          autoFocus
+                          className="glass-input h-12 w-full rounded-2xl pl-11 pr-10 text-sm font-mono outline-none ring-1 ring-emerald-500/35 transition-all focus:ring-emerald-500/80 placeholder:font-sans placeholder:text-muted-foreground/60 shadow-inner"
+                        />
+                        {friendTargetId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFriendTargetId("");
+                              setLiveUserResults([]);
+                            }}
+                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
                       <p className="mt-1.5 text-xs text-muted-foreground">
                         User IDs are case-insensitive and allow private connections without sharing phone numbers or personal emails.
                       </p>
                     </div>
 
-                    <div className="pt-2">
-                      <button
-                        type="submit"
-                        className="btn-ink liquid-press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full text-sm font-medium"
-                      >
-                        <UserPlus className="h-4 w-4" />
-                        <span>Send Friend Request</span>
-                      </button>
-                    </div>
-                  </form>
-
-                  {/* Pending Incoming Friend Requests */}
-                  {friendRequests.filter(
-                    (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
-                  ).length > 0 && (
-                    <div className="mt-6 border-t border-glass-edge pt-4">
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                        Incoming Requests ({friendRequests.filter(
-                          (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
-                        ).length})
-                      </h4>
-                      <div className="space-y-2.5">
-                        {friendRequests
-                          .filter(
-                            (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
-                          )
-                          .map((req) => (
-                            <div
-                              key={req.id}
-                              className="flex items-center justify-between gap-3 rounded-2xl border border-glass-edge bg-glass/40 p-3.5"
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-medium text-foreground">{req.fromName}</p>
-                                <p className="truncate font-mono text-xs text-muted-foreground">@{req.fromLumenId}</p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => acceptFriendRequestAndStartConvo(req)}
-                                  className="btn-ink rounded-full px-3.5 py-1.5 text-xs font-medium"
-                                >
-                                  Accept
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => removeFriendRequest(req)}
-                                  className="settings-trigger-btn flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-                                  title="Decline"
-                                  aria-label="Decline"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
+                    {/* Live Searching Indicator */}
+                    {isSearchingLive && (
+                      <div className="flex items-center gap-2 py-3 px-1 text-xs text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                        <span>Searching directory for "{friendTargetId}"...</span>
                       </div>
-                    </div>
-                  )}
+                    )}
+
+                    {/* Live Matching User Results - Instagram Searching Style */}
+                    {liveUserResults.length > 0 && (
+                      <div className="space-y-2.5 pt-1">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Matching Users ({liveUserResults.length})
+                        </p>
+                        <div className="space-y-2 max-h-[35vh] overflow-y-auto glass-scroll pr-1">
+                          {liveUserResults.map((target) => {
+                            const status = getFriendshipStatus(target);
+                            return (
+                              <div
+                                key={target.lumenId || target.uid}
+                                className="flex items-center justify-between gap-3 rounded-2xl border border-glass-edge bg-glass/40 p-3.5 transition-all hover:bg-glass/70 hover:border-emerald-500/30"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 border border-emerald-500/30 font-semibold text-emerald-400 text-sm">
+                                    {target.displayName.slice(0, 2).toUpperCase()}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold text-foreground">
+                                      {target.displayName}
+                                    </p>
+                                    <p className="truncate font-mono text-xs text-muted-foreground">
+                                      {target.handle?.startsWith("@") ? target.handle : `@${target.lumenId}`}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <div className="shrink-0">
+                                  {status === "connected" && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        handleNewChatOpenChange(false);
+                                        await ensureConversationWithFriend(target.lumenId, target.displayName, target.uid);
+                                      }}
+                                      className="btn-ink rounded-full px-4 py-1.5 text-xs font-medium"
+                                    >
+                                      Message
+                                    </button>
+                                  )}
+                                  {status === "requested" && (
+                                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3.5 py-1.5 text-xs font-medium text-emerald-400">
+                                      <Check className="h-3.5 w-3.5" />
+                                      Requested
+                                    </span>
+                                  )}
+                                  {status === "incoming" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const incomingReq = friendRequests.find(
+                                          (r) =>
+                                            r.status === "pending" &&
+                                            (r.toUid === user?.uid || normalizeLumenId(r.toLumenId) === user?.lumenId) &&
+                                            (normalizeLumenId(r.fromLumenId) === normalizeLumenId(target.lumenId) || r.fromUid === target.uid),
+                                        );
+                                        if (incomingReq) acceptFriendRequestAndStartConvo(incomingReq);
+                                      }}
+                                      className="btn-ink rounded-full px-4 py-1.5 text-xs font-medium"
+                                    >
+                                      Accept
+                                    </button>
+                                  )}
+                                  {status === "none" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSendFriendRequestToLiveUser(target)}
+                                      className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
+                                    >
+                                      <UserPlus className="h-3.5 w-3.5" />
+                                      <span>Send Request</span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Direct Request Card if typed ID has no matches */}
+                    {friendTargetId.trim().length >= 3 && !isSearchingLive && liveUserResults.length === 0 && (
+                      <div className="rounded-2xl border border-glass-edge bg-glass/25 p-4 text-center">
+                        <p className="text-sm font-medium text-foreground">No directory user found for "{friendTargetId.trim()}"</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          You can still send a direct friend request to this User ID.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleSendFriendRequest()}
+                          className="btn-ink liquid-press mt-3.5 inline-flex items-center justify-center gap-1.5 rounded-full px-5 py-2.5 text-xs font-medium"
+                        >
+                          <UserPlus className="h-3.5 w-3.5" />
+                          <span>Send Friend Request to {friendTargetId.trim()}</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Fallback Direct Send Button if ID typed and not in results */}
+                    {friendTargetId.trim().length >= 4 &&
+                      liveUserResults.length > 0 &&
+                      !liveUserResults.some((r) => normalizeLumenId(r.lumenId) === normalizeLumenId(friendTargetId)) && (
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={() => handleSendFriendRequest()}
+                            className="btn-ink liquid-press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full text-xs font-medium"
+                          >
+                            <UserPlus className="h-3.5 w-3.5" />
+                            <span>Send Direct Request to "{friendTargetId.trim()}"</span>
+                          </button>
+                        </div>
+                      )}
+
+                    {/* Empty State Prompt */}
+                    {!friendTargetId.trim() && (
+                      <div className="py-6 text-center">
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 mb-2.5">
+                          <Search className="h-5 w-5" />
+                        </div>
+                        <p className="text-sm font-medium text-foreground">Search for friends</p>
+                        <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
+                          Enter a username or Unique User ID (@username, LMN-...) to find users and send friend requests lively.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Pending Incoming Friend Requests */}
+                    {friendRequests.filter(
+                      (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                    ).length > 0 && (
+                      <div className="mt-6 border-t border-glass-edge pt-4">
+                        <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                          Incoming Requests ({friendRequests.filter(
+                            (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                          ).length})
+                        </h4>
+                        <div className="space-y-2.5">
+                          {friendRequests
+                            .filter(
+                              (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                            )
+                            .map((req) => (
+                              <div
+                                key={req.id}
+                                className="flex items-center justify-between gap-3 rounded-2xl border border-glass-edge bg-glass/40 p-3.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-foreground">{req.fromName}</p>
+                                  <p className="truncate font-mono text-xs text-muted-foreground">@{req.fromLumenId}</p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => acceptFriendRequestAndStartConvo(req)}
+                                    className="btn-ink rounded-full px-3.5 py-1.5 text-xs font-medium"
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFriendRequest(req)}
+                                    className="settings-trigger-btn flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                                    title="Decline"
+                                    aria-label="Decline"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
