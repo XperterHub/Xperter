@@ -46,6 +46,30 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   announcementAlerts: true,
 };
 
+export const READ_ANN_KEY = "lumen.inbox.readAnnouncements";
+export const READ_NOTIF_KEY = "lumen.inbox.readNotifications";
+export const CUSTOM_ANN_KEY = "lumen.inbox.customAnnouncements";
+export const NOTIF_PREFS_KEY = "lumen.inbox.prefs";
+
+export function getCustomAnnouncements(): AppAnnouncement[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_ANN_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomAnnouncement(ann: AppAnnouncement): void {
+  if (typeof window === "undefined") return;
+  try {
+    const existing = getCustomAnnouncements();
+    const next = [ann, ...existing.filter((a) => a.id !== ann.id)];
+    window.localStorage.setItem(CUSTOM_ANN_KEY, JSON.stringify(next));
+  } catch {}
+}
+
 export const INITIAL_APP_ANNOUNCEMENTS: AppAnnouncement[] = [
   {
     id: "ann_lumen_2_4",

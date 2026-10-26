@@ -6,6 +6,8 @@ import { ChromeGlyph } from "@/components/three/ChromeGlyph";
 import type { GlyphKind } from "@/components/three/ChromeScene";
 import { GLYPH_IMAGES } from "@/lib/config";
 
+const loadedSectionsCache = new Set<string>();
+
 export function ComingSoon({
   kind,
   name,
@@ -16,16 +18,22 @@ export function ComingSoon({
   index: string;
 }) {
   const sectionKey = `${index}-${kind}`;
-  const [revealKey, setRevealKey] = useState<string | null>(null);
-  const [unmountedKey, setUnmountedKey] = useState<string | null>(null);
+  const alreadyLoaded = loadedSectionsCache.has(sectionKey);
+  const [revealKey, setRevealKey] = useState<string | null>(alreadyLoaded ? sectionKey : null);
+  const [unmountedKey, setUnmountedKey] = useState<string | null>(alreadyLoaded ? sectionKey : null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const isRevealing = revealKey === sectionKey;
   const isLoaderMounted = unmountedKey !== sectionKey;
 
   useEffect(() => {
-    setRevealKey(null);
-    setUnmountedKey(null);
+    if (loadedSectionsCache.has(sectionKey)) {
+      setRevealKey(sectionKey);
+      setUnmountedKey(sectionKey);
+    } else {
+      setRevealKey(null);
+      setUnmountedKey(null);
+    }
   }, [sectionKey]);
 
   useEffect(() => {
@@ -79,6 +87,7 @@ export function ComingSoon({
           label={name}
           onFadeOutStart={() => setRevealKey(sectionKey)}
           onComplete={() => {
+            loadedSectionsCache.add(sectionKey);
             setRevealKey(sectionKey);
             setUnmountedKey(sectionKey);
           }}

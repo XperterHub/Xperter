@@ -1,6 +1,6 @@
 import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { Menu, PanelLeftClose, User } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Button } from "@/components/ui/button";
 import { SilkBackground } from "@/components/SilkBackground";
@@ -69,13 +69,44 @@ function WorkspaceNavIcon({ kind }: { kind: GlyphKind }) {
   }
 }
 
+const warmTabs = new Set<string>();
+
 export function AppShell() {
   const [open, setOpen] = useState(false);
   const navFooterRef = useRef<HTMLDivElement>(null);
   const path = useRouterState({ select: (r) => r.location.pathname });
+  const isRouterLoading = useRouterState({ select: (r) => r.status === "pending" || r.isLoading });
+  const [transitioning, setTransitioning] = useState(false);
   const activeIndex = Math.max(0, APP_PAGES.findIndex((p) => path.startsWith(p.to)));
+
+  useEffect(() => {
+    // If opening an unwarmed tab, show a brief fluid loader to smooth out any background freezing/lag
+    if (!warmTabs.has(path)) {
+      setTransitioning(true);
+      const timer = window.setTimeout(() => {
+        warmTabs.add(path);
+        setTransitioning(false);
+      }, 150);
+      return () => window.clearTimeout(timer);
+    } else {
+      setTransitioning(false);
+    }
+  }, [path]);
+
+  const showProgress = isRouterLoading || transitioning;
+
   return (
     <div className="h-dvh p-2.5 text-foreground sm:p-3 md:p-4">
+      {/* Sleek top loading indicator for tab switching */}
+      {showProgress && (
+        <div
+          role="progressbar"
+          aria-label="Loading workspace section"
+          className="fixed top-0 left-0 right-0 z-[100] h-[3px] bg-glass-strong overflow-hidden pointer-events-none"
+        >
+          <div className="h-full w-full bg-gradient-to-r from-emerald-400 via-primary to-cyan-400 animate-pulse origin-left" />
+        </div>
+      )}
       <SilkBackground />
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Trigger asChild>

@@ -20,11 +20,18 @@ import {
   LogIn,
   Trash2,
   UserPlus,
+  Users,
+  Megaphone,
   MoreVertical,
   Info,
   MinusCircle,
   XCircle,
 } from "lucide-react";
+import {
+  buildAnnouncementItem,
+  saveCustomAnnouncement,
+  type AnnouncementCategory,
+} from "@/lib/notifications";
 import {
   collection,
   deleteDoc,
@@ -501,13 +508,17 @@ function Messages() {
   const [pollQuestion, setPollQuestion] = useState("");
   const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
   const [newChatOpen, setNewChatOpen] = useState(false);
-  const [newChatMode, setNewChatMode] = useState<"friend" | "direct" | "group">("friend");
+  const [newChatMode, setNewChatMode] = useState<"menu" | "friend" | "direct" | "group" | "announcement">("menu");
+  const [popupSearch, setPopupSearch] = useState("");
   const [newChatName, setNewChatName] = useState("");
   const [newChatRole, setNewChatRole] = useState("");
   const [newChatIsGroup, setNewChatIsGroup] = useState(false);
   const [friendTargetId, setFriendTargetId] = useState("");
   const [friendTargetName, setFriendTargetName] = useState("");
   const [friendRequests, setFriendRequests] = useState<FriendRequestItem[]>([]);
+  const [announcementTitle, setAnnouncementTitle] = useState("");
+  const [announcementCategory, setAnnouncementCategory] = useState<AnnouncementCategory>("update");
+  const [announcementSummary, setAnnouncementSummary] = useState("");
 
   useEffect(() => {
     if (authReady && !user) {
@@ -522,10 +533,31 @@ function Messages() {
         playSettingsLiquidSound(nextOpen);
       }
       if (!nextOpen) {
-        setNewChatMode(folder === "groups" ? "group" : "friend");
+        setNewChatMode("menu");
+        setPopupSearch("");
       }
       return nextOpen;
     });
+  };
+
+  const handlePublishAnnouncementFromPopup = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!announcementTitle.trim() || !announcementSummary.trim()) return;
+    const ann = buildAnnouncementItem({
+      title: announcementTitle,
+      summary: announcementSummary,
+      body: announcementSummary,
+      category: announcementCategory,
+      version: "v2.5",
+      author: user?.name || "Workspace Admin",
+      pinned: true,
+    });
+    saveCustomAnnouncement(ann);
+    setAnnouncementTitle("");
+    setAnnouncementSummary("");
+    setNewChatMode("menu");
+    handleNewChatOpenChange(false);
+    toast.success("Announcement broadcasted to workspace inbox");
   };
 
   const handleHeaderMenuOpenChange = (nextOpen: boolean) => {
@@ -2149,6 +2181,18 @@ function Messages() {
 
   const isGroupPopover = folder === "groups" || newChatMode === "group";
 
+  const popupMatchingContacts = useMemo(() => {
+    const q = popupSearch.trim().toLowerCase();
+    if (!q) return [];
+    return contacts.filter((c) => {
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.handle.toLowerCase().includes(q) ||
+        (c.peerLumenId && c.peerLumenId.toLowerCase().includes(q))
+      );
+    });
+  }, [popupSearch, contacts]);
+
   return (
     <div
       onClick={() => {
@@ -2317,26 +2361,14 @@ function Messages() {
           </ul>
         )}
 
-        {/* Bottom-Right + Button using the Settings Liquid Lens Animation */}
+        {/* Bottom-Right + Button with WhatsApp-style Action Menu */}
         <div className="absolute bottom-3.5 right-3.5 z-30">
           <Popover open={newChatOpen} onOpenChange={handleNewChatOpenChange}>
             <PopoverTrigger asChild>
               <button
                 type="button"
-                title={
-                  newChatOpen
-                    ? "Close"
-                    : isGroupPopover
-                      ? "Create group"
-                      : "Add friend by User ID"
-                }
-                aria-label={
-                  newChatOpen
-                    ? "Close"
-                    : isGroupPopover
-                      ? "Create group"
-                      : "Add friend by User ID"
-                }
+                title={newChatOpen ? "Close menu" : "New chat or actions"}
+                aria-label={newChatOpen ? "Close menu" : "New chat or actions"}
                 className="group glass settings-trigger-btn relative z-30 flex h-11 w-11 items-center justify-center rounded-full text-foreground/90 hover:text-foreground"
               >
                 <Plus
@@ -2350,61 +2382,271 @@ function Messages() {
               side="top"
               align="end"
               sideOffset={12}
-              collisionPadding={10}
+              collisionPadding={12}
               updatePositionStrategy="always"
-              aria-labelledby="enter-user-id-title"
-              className="settings-popover glass z-[70] w-64 max-w-[calc(100vw-2.5rem)] rounded-[1.75rem] p-5 text-foreground"
+              aria-labelledby="new-chat-menu-title"
+              className="settings-popover glass z-[70] w-80 max-w-[calc(100vw-2.5rem)] rounded-[1.75rem] p-4 text-foreground shadow-2xl backdrop-blur-2xl"
             >
-              <div className="mb-4 flex items-center justify-between">
-                <h2 id="enter-user-id-title" className="text-base font-medium">
-                  {isGroupPopover ? "Create Group" : "Enter User ID"}
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => handleNewChatOpenChange(false)}
-                  aria-label="Close"
-                  title="Close"
-                  className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground outline-none hover:text-foreground"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              {isGroupPopover ? (
-                <form onSubmit={createNewChat} className="space-y-3">
-                  <input
-                    value={newChatName}
-                    onChange={(e) => setNewChatName(e.target.value)}
-                    maxLength={BLUEPRINT_LIMITS.MAX_NAME_LENGTH}
-                    placeholder="Group name (e.g. Design Team)"
-                    required
-                    className="glass-input w-full rounded-xl px-3.5 py-2.5 text-xs outline-none placeholder:text-faint"
-                  />
-                  <button
-                    type="submit"
-                    className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
-                  >
-                    <LumenIcon name="group" className="h-3.5 w-3.5" />
-                    <span>Create Group</span>
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleSendFriendRequest} className="space-y-3">
-                  <input
-                    value={friendTargetId}
-                    onChange={(e) => setFriendTargetId(e.target.value)}
-                    maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
-                    placeholder="Enter friend's User ID"
-                    required
-                    className="glass-input w-full rounded-xl px-3.5 py-2.5 font-mono text-xs outline-none placeholder:font-sans placeholder:text-faint"
-                  />
-                  <button
-                    type="submit"
-                    className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
-                  >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    <span>Add Friend</span>
-                  </button>
-                </form>
+              {newChatMode === "menu" && (
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 id="new-chat-menu-title" className="text-sm font-semibold tracking-tight text-foreground">
+                      New conversation
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => handleNewChatOpenChange(false)}
+                      aria-label="Close"
+                      title="Close"
+                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground outline-none hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Top Search bar - matches Screenshot 4 */}
+                  <div className="relative mb-3">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-emerald-400" />
+                    <input
+                      value={popupSearch}
+                      onChange={(e) => setPopupSearch(e.target.value)}
+                      placeholder="Search name, number or @username"
+                      aria-label="Search name, number or @username"
+                      className="glass-input w-full rounded-full py-2 pl-9 pr-7 text-xs text-foreground outline-none ring-1 ring-emerald-500/30 transition-all focus:ring-emerald-500/70 placeholder:text-muted-foreground/60"
+                    />
+                    {popupSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setPopupSearch("")}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Search Results (if typing in search) */}
+                  {popupSearch.trim().length > 0 ? (
+                    <div className="glass-scroll max-h-56 space-y-1 overflow-y-auto pr-1">
+                      {popupMatchingContacts.length === 0 ? (
+                        <div className="py-6 text-center text-xs text-muted-foreground">
+                          No matching contacts found for "{popupSearch}"
+                        </div>
+                      ) : (
+                        popupMatchingContacts.map((contact) => (
+                          <button
+                            key={contact.id}
+                            type="button"
+                            onClick={() => {
+                              selectChat(contact.id);
+                              handleNewChatOpenChange(false);
+                            }}
+                            className="flex w-full items-center gap-3 rounded-xl p-2 text-left transition-colors hover:bg-foreground/5"
+                          >
+                            <Avatar name={contact.name} online={resolveContactOnline(contact)} isGroup={contact.isGroup} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-foreground">{contact.name}</p>
+                              <p className="truncate font-mono text-[11px] text-muted-foreground">{contact.handle}</p>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    /* Default 3 Menu Actions matching Screenshot 4 with custom emerald icons */
+                    <div className="space-y-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("group")}
+                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                      >
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
+                          <Users className="h-5 w-5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground">New group</p>
+                          <p className="text-xs text-muted-foreground">Create a multi-member chat</p>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("friend")}
+                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                      >
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
+                          <UserPlus className="h-5 w-5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground">New contact</p>
+                          <p className="text-xs text-muted-foreground">Add friend by Unique User ID</p>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("announcement")}
+                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                      >
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
+                          <Megaphone className="h-5 w-5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground">New announcement</p>
+                          <p className="text-xs text-muted-foreground">Broadcast updates to workspace</p>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Add Friend Form */}
+              {newChatMode === "friend" && (
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("menu")}
+                        aria-label="Back to menu"
+                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                      </button>
+                      <h2 className="text-sm font-semibold text-foreground">Add Friend</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleNewChatOpenChange(false)}
+                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <form onSubmit={handleSendFriendRequest} className="space-y-3">
+                    <input
+                      value={friendTargetId}
+                      onChange={(e) => setFriendTargetId(e.target.value)}
+                      maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
+                      placeholder="Enter friend's User ID (e.g. LMN-CYXEJ4)"
+                      required
+                      autoFocus
+                      className="glass-input w-full rounded-xl px-3.5 py-2.5 font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground/60"
+                    />
+                    <button
+                      type="submit"
+                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
+                    >
+                      <UserPlus className="h-3.5 w-3.5" />
+                      <span>Add Friend</span>
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* Create Group Form */}
+              {newChatMode === "group" && (
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("menu")}
+                        aria-label="Back to menu"
+                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                      </button>
+                      <h2 className="text-sm font-semibold text-foreground">Create Group</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleNewChatOpenChange(false)}
+                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <form onSubmit={createNewChat} className="space-y-3">
+                    <input
+                      value={newChatName}
+                      onChange={(e) => setNewChatName(e.target.value)}
+                      maxLength={BLUEPRINT_LIMITS.MAX_NAME_LENGTH}
+                      placeholder="Group name (e.g. Design Team)"
+                      required
+                      autoFocus
+                      className="glass-input w-full rounded-xl px-3.5 py-2.5 text-xs outline-none placeholder:text-muted-foreground/60"
+                    />
+                    <button
+                      type="submit"
+                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                      <span>Create Group</span>
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* Create Announcement Form */}
+              {newChatMode === "announcement" && (
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewChatMode("menu")}
+                        aria-label="Back to menu"
+                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <ArrowLeft className="h-4 w-4" />
+                      </button>
+                      <h2 className="text-sm font-semibold text-foreground">New Announcement</h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleNewChatOpenChange(false)}
+                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <form onSubmit={handlePublishAnnouncementFromPopup} className="space-y-2.5">
+                    <input
+                      value={announcementTitle}
+                      onChange={(e) => setAnnouncementTitle(e.target.value)}
+                      placeholder="Announcement title…"
+                      required
+                      autoFocus
+                      className="glass-input w-full rounded-xl px-3.5 py-2 text-xs outline-none placeholder:text-muted-foreground/60"
+                    />
+                    <select
+                      value={announcementCategory}
+                      onChange={(e) => setAnnouncementCategory(e.target.value as AnnouncementCategory)}
+                      className="glass-input w-full rounded-xl px-3 py-2 text-xs text-foreground outline-none"
+                    >
+                      <option value="update">Platform Update</option>
+                      <option value="feature">New Feature</option>
+                      <option value="security">Security Notice</option>
+                    </select>
+                    <textarea
+                      value={announcementSummary}
+                      onChange={(e) => setAnnouncementSummary(e.target.value)}
+                      placeholder="Announcement message to all workspace users…"
+                      required
+                      rows={3}
+                      className="glass-input w-full resize-none rounded-xl px-3.5 py-2 text-xs outline-none placeholder:text-muted-foreground/60"
+                    />
+                    <button
+                      type="submit"
+                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
+                    >
+                      <Megaphone className="h-3.5 w-3.5" />
+                      <span>Broadcast Announcement</span>
+                    </button>
+                  </form>
+                </div>
               )}
             </PopoverContent>
           </Popover>
