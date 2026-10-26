@@ -123,8 +123,15 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null,
 ): never {
+  const rawMsg = error instanceof Error ? error.message : String(error);
+  const isOffline =
+    rawMsg.includes("offline") ||
+    rawMsg.includes("NOT_FOUND") ||
+    rawMsg.includes("unavailable") ||
+    rawMsg.includes("network");
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: rawMsg,
     authInfo: {
       userId: auth.currentUser?.uid,
       email: auth.currentUser?.email,
@@ -141,6 +148,9 @@ export function handleFirestoreError(
     path,
   };
   console.error("Firestore Error: ", JSON.stringify(errInfo));
+  if (isOffline) {
+    throw new Error("Cloud database is currently offline. Your session is active locally.");
+  }
   throw new Error(JSON.stringify(errInfo));
 }
 

@@ -414,7 +414,10 @@ export async function syncUserProfileToFirestore(
     try {
       snap = await getDoc(profileRef);
     } catch (err) {
-      handleFirestoreError(err, OperationType.GET, profilePath);
+      console.warn("Firestore unreachable or offline, continuing with local session:", err);
+      syncedProfileUids.add(appUser.uid);
+      notifyLocalAuthListeners();
+      return appUser;
     }
 
     // For Firestore UserProfile, photoURL max length is 2048 chars (data URLs stay in local override)
@@ -439,7 +442,7 @@ export async function syncUserProfileToFirestore(
           updatedAt: serverTimestamp(),
         });
       } catch (err) {
-        handleFirestoreError(err, OperationType.CREATE, profilePath);
+        console.warn("Could not create cloud profile, keeping local:", err);
       }
     } else {
       const existingData = snap.data();
@@ -497,7 +500,7 @@ export async function syncUserProfileToFirestore(
             updatedAt: serverTimestamp(),
           });
         } catch (err) {
-          handleFirestoreError(err, OperationType.UPDATE, profilePath);
+          console.warn("Could not update profile in Firestore, keeping local:", err);
         }
       }
     }
@@ -536,7 +539,7 @@ export async function syncUserProfileToFirestore(
         }
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, dirPath);
+      console.warn("Could not sync directory entry to Firestore:", err);
     }
 
     syncedProfileUids.add(appUser.uid);

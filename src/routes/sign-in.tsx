@@ -85,7 +85,7 @@ function SignIn() {
     }
 
     if (!pendingGoogleUser) {
-      nav({ to: "/" });
+      nav({ to: "/app/messages" });
     }
   }, [authReady, user, pendingGoogleUser, nav]);
 
@@ -102,7 +102,7 @@ function SignIn() {
     try {
       await signInWithEmailPassword(email, password, remember);
       toast.success("Signed in successfully");
-      nav({ to: "/" });
+      nav({ to: "/app/messages" });
     } catch (err: any) {
       toast.error(err?.message || "Sign in failed");
     } finally {
@@ -122,7 +122,7 @@ function SignIn() {
 
       if (hasCustomId) {
         toast.success("Signed in with Google");
-        nav({ to: "/" });
+        nav({ to: "/app/messages" });
       } else {
         setPendingGoogleUser(authedUser);
         setGoogleUsername(authedUser.lumenId || defaultId);
@@ -167,16 +167,16 @@ function SignIn() {
       await updateUserProfile({
         lumenId: check.normalized,
       });
+    } catch (err: any) {
+      console.warn("Could not sync username to cloud, continuing locally:", err);
+    } finally {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(`lumen.username.confirmed.${pendingGoogleUser.uid}`, "true");
       }
       toast.success(`Welcome to Xperter, @${check.normalized}!`);
       setPendingGoogleUser(null);
-      nav({ to: "/" });
-    } catch (err: any) {
-      toast.error(err?.message || "Could not save username ID");
-    } finally {
       setSavingGoogleUsername(false);
+      nav({ to: "/app/messages" });
     }
   };
 
@@ -232,8 +232,12 @@ function SignIn() {
       <Dialog
         open={Boolean(pendingGoogleUser)}
         onOpenChange={(open) => {
-          if (!open && !savingGoogleUsername) {
-            // keep open until confirmed
+          if (!open && !savingGoogleUsername && pendingGoogleUser) {
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem(`lumen.username.confirmed.${pendingGoogleUser.uid}`, "true");
+            }
+            setPendingGoogleUser(null);
+            nav({ to: "/app/messages" });
           }
         }}
       >

@@ -718,7 +718,7 @@ function Messages() {
         syncMergedContacts();
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, "conversations");
+        console.warn("Firestore conversations owner query offline/unreachable:", error);
       },
     );
 
@@ -843,7 +843,7 @@ function Messages() {
         outgoingList = snap.docs.map(parseDoc);
         mergeRequests();
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, "friendRequests"),
+      (err) => console.warn("Firestore friendRequests outQuery offline/unreachable:", err),
     );
 
     const unsubIn = onSnapshot(
@@ -852,7 +852,7 @@ function Messages() {
         incomingList = snap.docs.map(parseDoc);
         mergeRequests();
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, "friendRequests"),
+      (err) => console.warn("Firestore friendRequests inQuery offline/unreachable:", err),
     );
 
     return () => {
@@ -948,7 +948,7 @@ function Messages() {
         setMessagesByChat((prev) => ({ ...prev, [activeId]: loaded }));
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, msgsPath);
+        console.warn("Firestore messages query offline/unreachable:", error);
       },
     );
 
