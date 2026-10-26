@@ -106,9 +106,11 @@ function SignUp() {
       }
     } catch (err: any) {
       if (err?.code === "auth/unauthorized-domain") {
+        const currentDomain =
+          typeof window !== "undefined" ? window.location.hostname : "xperter-workspace.web.app";
         toast.error(
-          "Google sign-in is blocked: add 'nagarajps9894-sketch.github.io' to Firebase Console → Authentication → Settings → Authorized domains.",
-          { duration: 10000 },
+          `Google sign-in is blocked: please add '${currentDomain}' to Firebase Console → Authentication → Settings → Authorized domains.`,
+          { duration: 12000 },
         );
       } else {
         toast.error(err?.message || "Google authentication could not be completed.");

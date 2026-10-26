@@ -130,9 +130,11 @@ function SignIn() {
     } catch (err: any) {
       console.error("Google sign-in error:", err);
       if (err?.code === "auth/unauthorized-domain") {
+        const currentDomain =
+          typeof window !== "undefined" ? window.location.hostname : "xperter-workspace.web.app";
         toast.error(
-          "Google sign-in is blocked: this domain is not authorized in Firebase Console. Go to Firebase Console → Authentication → Settings → Authorized domains and add 'nagarajps9894-sketch.github.io'.",
-          { duration: 10000 },
+          `Google sign-in is blocked: '${currentDomain}' is not authorized in Firebase. Please add '${currentDomain}' to Firebase Console → Authentication → Settings → Authorized domains.`,
+          { duration: 12000 },
         );
       } else if (err?.code === "auth/popup-blocked") {
         toast.error("Popup was blocked by your browser. Please allow popups for Google sign-in.");
