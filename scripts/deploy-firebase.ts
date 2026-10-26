@@ -104,8 +104,16 @@ async function runConcurrent<T>(items: T[], limit: number, fn: (item: T, index: 
 }
 
 async function main() {
-  const sa = getServiceAccount();
-  const siteId = sa.project_id || 'gen-lang-client-0104750557';
+  let configuredSite: string | undefined;
+  try {
+    const fbJson = JSON.parse(fs.readFileSync(path.resolve('firebase.json'), 'utf8'));
+    configuredSite = fbJson.hosting?.site;
+  } catch {}
+  const siteId =
+    process.env.FIREBASE_HOSTING_SITE ||
+    configuredSite ||
+    sa.project_id ||
+    'gen-lang-client-0104750557';
   const publicDir = path.resolve('.output/public');
 
   if (!fs.existsSync(publicDir)) {
