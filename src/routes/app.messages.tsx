@@ -55,7 +55,7 @@ import {
   playSettingsLiquidSound,
   triggerSettingsHaptic,
 } from "@/components/SettingsControl";
-import { signInWithGoogle, useAuthState } from "@/lib/auth";
+import { listAllDictionaryAccounts, signInWithGoogle, useAuthState } from "@/lib/auth";
 import {
   createConversationBetweenUsers,
   searchUsersInFirestore,
@@ -955,10 +955,11 @@ function Messages() {
 
     let outgoingList: FriendRequestItem[] = [];
     let incomingList: FriendRequestItem[] = [];
+    let incomingLumenList: FriendRequestItem[] = [];
 
     const mergeRequests = () => {
       const byId = new Map<string, FriendRequestItem>();
-      for (const item of [...incomingList, ...outgoingList]) {
+      for (const item of [...incomingList, ...incomingLumenList, ...outgoingList]) {
         byId.set(item.id, item);
       }
       const merged = Array.from(byId.values()).sort((a, b) => b.createdAtMs - a.createdAtMs);
@@ -991,6 +992,10 @@ function Messages() {
       collection(db, "friendRequests"),
       where("toUid", "==", user.uid),
     );
+    const inLumenQuery = query(
+      collection(db, "friendRequests"),
+      where("toLumenId", "==", user.lumenId),
+    );
 
     const unsubOut = onSnapshot(
       outQuery,
@@ -1010,9 +1015,19 @@ function Messages() {
       (err) => console.warn("Firestore friendRequests inQuery offline/unreachable:", err),
     );
 
+    const unsubInLumen = onSnapshot(
+      inLumenQuery,
+      (snap) => {
+        incomingLumenList = snap.docs.map(parseDoc);
+        mergeRequests();
+      },
+      (err) => console.warn("Firestore friendRequests inLumenQuery offline/unreachable:", err),
+    );
+
     return () => {
       unsubOut();
       unsubIn();
+      unsubInLumen();
     };
   }, [authReady, user]);
 
@@ -1116,6 +1131,39 @@ function Messages() {
     [messagesByChat, activeId],
   );
   const text = activeId ? (drafts[activeId] ?? "") : "";
+
+  const friendshipLockState = useMemo(() => {
+    if (!active || active.isGroup || !user) {
+      return { locked: false, isIncoming: false, pendingReq: null as FriendRequestItem | null };
+    }
+    const peerLumenId = normalizeLumenId(active.peerLumenId || "");
+    const peerUid = active.peerUserId;
+
+    // Check if there is an accepted friend request
+    const accepted = friendRequests.some(
+      (r) =>
+        r.status === "accepted" &&
+        ((r.fromUid === user.uid && (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
+         (r.toUid === user.uid && (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
+    );
+    if (accepted) return { locked: false, isIncoming: false, pendingReq: null };
+
+    // Check if there is a pending request
+    const pendingReq = friendRequests.find(
+      (r) =>
+        r.status === "pending" &&
+        ((r.fromUid === user.uid && (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
+         ((r.toUid === user.uid || normalizeLumenId(r.toLumenId) === user.lumenId) &&
+          (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
+    );
+
+    if (pendingReq) {
+      const isIncoming = pendingReq.toUid === user.uid || normalizeLumenId(pendingReq.toLumenId) === user.lumenId;
+      return { locked: true, isIncoming, pendingReq };
+    }
+
+    return { locked: false, isIncoming: false, pendingReq: null };
+  }, [active, user, friendRequests]);
 
   const publishTypingStatus = (conv: Contact | undefined, isTyping: boolean) => {
     if (!user || !conv) return;
@@ -1230,6 +1278,14 @@ function Messages() {
 
   const handleStartCall = (kind: "audio" | "video") => {
     if (!active || !user) return;
+    if (friendshipLockState.locked) {
+      toast.error(
+        friendshipLockState.isIncoming
+          ? "Please accept their friend request to start voice/video calls."
+          : "Calling unlocks once your friend accepts your friend request."
+      );
+      return;
+    }
     const peerUid =
       active.peerUserId ||
       active.participantIds?.find((id) => id !== user.uid) ||
@@ -1429,6 +1485,14 @@ function Messages() {
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (friendshipLockState.locked) {
+      toast.error(
+        friendshipLockState.isIncoming
+          ? "Please accept their friend request above to send messages."
+          : "Messaging unlocks once your friend accepts your friend request."
+      );
+      return;
+    }
     if (!text.trim() || !active || !user) return;
 
     if (editingMsg) {
@@ -1693,11 +1757,39 @@ function Messages() {
   const handleQuickFriendRequest = async (target: DirectoryUser) => {
     if (!user) return;
     const targetLumenId = normalizeLumenId(target.lumenId);
-    const resolvedToUid = sanitizeId(target.uid || `dir_${targetLumenId}`);
-    const resolvedToName = (target.displayName.trim() || `User ${targetLumenId}`).slice(
+    let resolvedToUid = sanitizeId(target.uid || "");
+    let resolvedToName = (target.displayName.trim() || `User ${targetLumenId}`).slice(
       0,
       BLUEPRINT_LIMITS.MAX_NAME_LENGTH,
     );
+
+    // If target.uid is missing or starts with dir_ or usr_, resolve the REAL auth UID from dictionary or Firestore
+    if (!resolvedToUid || resolvedToUid.startsWith("dir_") || resolvedToUid.startsWith("usr_")) {
+      const dictMatch = listAllDictionaryAccounts().find(
+        (a) => a.usernameId.toLowerCase() === targetLumenId.toLowerCase(),
+      );
+      if (dictMatch?.uid && !dictMatch.uid.startsWith("usr_") && !dictMatch.uid.startsWith("dir_")) {
+        resolvedToUid = sanitizeId(dictMatch.uid);
+      } else {
+        try {
+          let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+          if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
+            dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
+          }
+          if (dirSnap.exists()) {
+            const data = dirSnap.data();
+            if (data.uid) resolvedToUid = sanitizeId(data.uid);
+            if (data.displayName) resolvedToName = data.displayName;
+          }
+        } catch {}
+      }
+    }
+
+    if (!resolvedToUid || resolvedToUid.startsWith("dir_")) {
+      toast.error(`Could not verify recipient with User ID @${targetLumenId}`);
+      return;
+    }
+
     const reqId = sanitizeId(`freq_${user.uid.slice(0, 20)}_${targetLumenId}_${Date.now().toString(36)}`);
 
     if (!isCloud) {
@@ -1713,7 +1805,13 @@ function Messages() {
         createdAtMs: Date.now(),
       };
       saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
-      toast.success(`Friend request sent to ${resolvedToName} (${targetLumenId})`);
+      setSentRequestMap((prev) => ({
+        ...prev,
+        [targetLumenId]: true,
+        [target.lumenId]: true,
+        [resolvedToUid]: true,
+      }));
+      toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
       return;
     }
 
@@ -1730,7 +1828,13 @@ function Messages() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      toast.success(`Friend request sent to ${resolvedToName} (${targetLumenId})`);
+      setSentRequestMap((prev) => ({
+        ...prev,
+        [targetLumenId]: true,
+        [target.lumenId]: true,
+        [resolvedToUid]: true,
+      }));
+      toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, reqPath);
     }
@@ -1743,7 +1847,15 @@ function Messages() {
     const normTarget = normalizeLumenId(target.lumenId);
     if (user.lumenId === normTarget || user.uid === target.uid) return "self";
 
-    const isConnected = contacts.some(
+    // 1. Check if accepted
+    const hasAcceptedReq = friendRequests.some(
+      (r) =>
+        r.status === "accepted" &&
+        ((r.fromUid === user.uid && (normalizeLumenId(r.toLumenId) === normTarget || r.toUid === target.uid)) ||
+         (r.toUid === user.uid && (normalizeLumenId(r.fromLumenId) === normTarget || r.fromUid === target.uid))),
+    );
+
+    const isConnected = hasAcceptedReq || contacts.some(
       (c) =>
         !c.isGroup &&
         (c.participantLumenIds?.some((l) => normalizeLumenId(l) === normTarget) ||
@@ -1752,7 +1864,9 @@ function Messages() {
     );
     if (isConnected) return "connected";
 
-    if (sentRequestMap[normTarget] || sentRequestMap[target.lumenId]) return "requested";
+    if (sentRequestMap[normTarget] || sentRequestMap[target.lumenId] || (target.uid && sentRequestMap[target.uid])) {
+      return "requested";
+    }
 
     const hasOutgoing = friendRequests.some(
       (r) =>
@@ -2778,37 +2892,16 @@ function Messages() {
 
                     {/* Direct Request Card if typed ID has no matches */}
                     {friendTargetId.trim().length >= 3 && !isSearchingLive && liveUserResults.length === 0 && (
-                      <div className="rounded-2xl border border-glass-edge bg-glass/25 p-4 text-center">
-                        <p className="text-sm font-medium text-foreground">No directory user found for "{friendTargetId.trim()}"</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          You can still send a direct friend request to this User ID.
+                      <div className="rounded-2xl border border-glass-edge bg-glass/25 p-5 text-center">
+                        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-destructive/15 text-destructive mb-2.5">
+                          <XCircle className="h-5 w-5" />
+                        </div>
+                        <p className="text-sm font-medium text-foreground">No user found with ID "{friendTargetId.trim()}"</p>
+                        <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
+                          The User ID must match an existing registered account to appear in search and receive friend requests.
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => handleSendFriendRequest()}
-                          className="btn-ink liquid-press mt-3.5 inline-flex items-center justify-center gap-1.5 rounded-full px-5 py-2.5 text-xs font-medium"
-                        >
-                          <UserPlus className="h-3.5 w-3.5" />
-                          <span>Send Friend Request to {friendTargetId.trim()}</span>
-                        </button>
                       </div>
                     )}
-
-                    {/* Fallback Direct Send Button if ID typed and not in results */}
-                    {friendTargetId.trim().length >= 4 &&
-                      liveUserResults.length > 0 &&
-                      !liveUserResults.some((r) => normalizeLumenId(r.lumenId) === normalizeLumenId(friendTargetId)) && (
-                        <div className="pt-2">
-                          <button
-                            type="button"
-                            onClick={() => handleSendFriendRequest()}
-                            className="btn-ink liquid-press inline-flex h-11 w-full items-center justify-center gap-2 rounded-full text-xs font-medium"
-                          >
-                            <UserPlus className="h-3.5 w-3.5" />
-                            <span>Send Direct Request to "{friendTargetId.trim()}"</span>
-                          </button>
-                        </div>
-                      )}
 
                     {/* Empty State Prompt */}
                     {!friendTargetId.trim() && (
@@ -3748,6 +3841,52 @@ function Messages() {
             </div>
           )}
 
+          {/* Instagram-style Friend Request Gating Banner */}
+          {friendshipLockState.locked && (
+            <div className="border-t border-glass-edge bg-glass-strong/95 p-3.5 backdrop-blur-xl">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-400">
+                    <UserPlus className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <p className="text-xs font-semibold text-foreground sm:text-sm">
+                      {friendshipLockState.isIncoming
+                        ? `${active.name} (@${active.peerLumenId}) sent you a friend request`
+                        : `Friend request pending with ${active.name}`}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {friendshipLockState.isIncoming
+                        ? "Accept to start messaging and view each other's full profile."
+                        : "Messaging and profile details will unlock once they accept your request."}
+                    </p>
+                  </div>
+                </div>
+
+                {friendshipLockState.isIncoming && friendshipLockState.pendingReq && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => acceptFriendRequestAndStartConvo(friendshipLockState.pendingReq!)}
+                      className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                      <span>Accept Request</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeFriendRequest(friendshipLockState.pendingReq!)}
+                      className="inline-flex items-center gap-1 rounded-full px-3 py-2 text-xs font-medium text-muted-foreground hover:text-destructive"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      <span>Decline</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Clean Minimal Composer Bar */}
           <form onSubmit={send} className="relative flex items-center gap-1.5 p-2.5 sm:gap-2 sm:p-4">
             <input
@@ -3757,7 +3896,7 @@ function Messages() {
               onChange={handleFileUpload}
             />
 
-            {composerMenuOpen && (
+            {composerMenuOpen && !friendshipLockState.locked && (
               <div className="glass absolute bottom-16 left-4 z-30 flex flex-col gap-1 rounded-2xl p-2 text-xs shadow-xl">
                 <button
                   type="button"
@@ -3783,10 +3922,11 @@ function Messages() {
 
             <button
               type="button"
+              disabled={friendshipLockState.locked}
               onClick={() => setComposerMenuOpen((o) => !o)}
               aria-label="Attach media or poll"
               title="Attach media or poll"
-              className={`glass-input liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 ${
+              className={`glass-input liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed ${
                 composerMenuOpen ? "btn-ink" : ""
               }`}
             >
@@ -3800,20 +3940,27 @@ function Messages() {
                 onBlur={() => publishTypingStatus(active, false)}
                 maxLength={BLUEPRINT_LIMITS.MAX_TEXT_LENGTH}
                 placeholder={
-                  recording ? "Recording… tap stop to send" : "Write a message…"
+                  friendshipLockState.locked
+                    ? friendshipLockState.isIncoming
+                      ? "Accept friend request above to message"
+                      : "Waiting for friend to accept request..."
+                    : recording
+                      ? "Recording… tap stop to send"
+                      : "Write a message…"
                 }
                 aria-label="Message"
-                disabled={recording}
-                className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint"
+                disabled={recording || friendshipLockState.locked}
+                className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
 
             <button
               type="button"
+              disabled={friendshipLockState.locked}
               onClick={toggleRecord}
               aria-label={recording ? "Stop recording" : "Record voice message"}
               title={recording ? "Stop recording" : "Record voice note"}
-              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 ${
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed ${
                 recording
                   ? "animate-pulse bg-destructive text-destructive-foreground"
                   : "glass-input"
@@ -3823,8 +3970,9 @@ function Messages() {
             </button>
             <button
               type="submit"
+              disabled={friendshipLockState.locked}
               aria-label="Send"
-              className="btn-ink liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12"
+              className="btn-ink liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Send className="h-4 w-4" />
             </button>

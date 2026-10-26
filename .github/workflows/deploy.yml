@@ -21,6 +21,9 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    env:
+      FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
+      FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,12 +37,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run automated test suite
-        run: bun test src/test/profile-vault-inbox.test.ts
+        run: bun run test
 
       - name: Build for Firebase Hosting
         if: env.FIREBASE_KEY != ''
         env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
           NODE_ENV: production
           GITHUB_PAGES: "false"
           BASE_PATH: ""
@@ -49,9 +51,6 @@ jobs:
 
       - name: Deploy to Firebase Hosting (Live)
         if: env.FIREBASE_KEY != ''
-        env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_GEN_LANG_CLIENT_0104750557 }}
         run: bun run scripts/deploy-firebase.ts
 
       - name: Build project for GitHub Pages

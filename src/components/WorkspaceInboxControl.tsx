@@ -14,11 +14,17 @@ import {
   Volume2,
   VolumeX,
   X,
+  UserCheck,
+  UserPlus,
+  UserX,
 } from "lucide-react";
 import {
   collection,
+  doc,
   onSnapshot,
   query,
+  serverTimestamp,
+  updateDoc,
   where,
   type Timestamp,
 } from "firebase/firestore";
@@ -29,6 +35,7 @@ import {
   triggerSettingsHaptic,
 } from "@/components/SettingsControl";
 import { useAuthState } from "@/lib/auth";
+import { createConversationBetweenUsers } from "@/lib/conversations";
 import { db } from "@/lib/firebase";
 import {
   countUnreadAnnouncements,
@@ -210,13 +217,90 @@ export function WorkspaceInboxControl({
     };
   }, [user]);
 
+  // Subscribe in real-time to incoming friend requests directed to current user
+  const [cloudFriendRequests, setCloudFriendRequests] = useState<Array<{
+    id: string;
+    fromUid: string;
+    fromLumenId: string;
+    fromName: string;
+    toUid: string;
+    toLumenId: string;
+    toName: string;
+    status: "pending" | "accepted" | "declined";
+    createdAtMs: number;
+  }>>([]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setCloudFriendRequests([]);
+      return;
+    }
+
+    let uidList: typeof cloudFriendRequests = [];
+    let lumenIdList: typeof cloudFriendRequests = [];
+
+    const mergeRequests = () => {
+      const byId = new Map<string, typeof cloudFriendRequests[0]>();
+      for (const req of [...uidList, ...lumenIdList]) {
+        byId.set(req.id, req);
+      }
+      setCloudFriendRequests(Array.from(byId.values()));
+    };
+
+    const parseReq = (d: any, id: string) => {
+      const ts = d.createdAt as Timestamp | undefined;
+      return {
+        id,
+        fromUid: String(d.fromUid || ""),
+        fromLumenId: String(d.fromLumenId || ""),
+        fromName: String(d.fromName || "User"),
+        toUid: String(d.toUid || ""),
+        toLumenId: String(d.toLumenId || ""),
+        toName: String(d.toName || "You"),
+        status: (d.status === "accepted" || d.status === "declined" ? d.status : "pending") as "pending" | "accepted" | "declined",
+        createdAtMs: ts ? ts.toMillis() : Date.now(),
+      };
+    };
+
+    const qUid = query(
+      collection(db, "friendRequests"),
+      where("toUid", "==", user.uid),
+    );
+    const unsubUid = onSnapshot(
+      qUid,
+      (snap) => {
+        uidList = snap.docs.map((docSnap) => parseReq(docSnap.data(), docSnap.id)).filter((r) => r.status === "pending");
+        mergeRequests();
+      },
+      () => {},
+    );
+
+    const qLumen = query(
+      collection(db, "friendRequests"),
+      where("toLumenId", "==", user.lumenId),
+    );
+    const unsubLumen = onSnapshot(
+      qLumen,
+      (snap) => {
+        lumenIdList = snap.docs.map((docSnap) => parseReq(docSnap.data(), docSnap.id)).filter((r) => r.status === "pending");
+        mergeRequests();
+      },
+      () => {},
+    );
+
+    return () => {
+      unsubUid();
+      unsubLumen();
+    };
+  }, [user?.uid, user?.lumenId]);
+
   const activeConversations = cloudConversations;
 
   const synthesizedNotifications = useMemo(() => {
     return synthesizeWorkspaceNotifications({
       currentUserUid: user?.uid,
       contacts: activeConversations,
-      friendRequests: [],
+      friendRequests: cloudFriendRequests,
       announcements,
       readAnnouncementIds,
       readNotificationIds,
@@ -225,15 +309,54 @@ export function WorkspaceInboxControl({
   }, [
     user?.uid,
     activeConversations,
+    cloudFriendRequests,
     announcements,
     readAnnouncementIds,
     readNotificationIds,
   ]);
 
-  // Only display notifications from overall app, no friend request clutter
-  const notificationItems = useMemo(() => {
-    return synthesizedNotifications.filter((item) => item.kind !== "friend_request");
-  }, [synthesizedNotifications]);
+  const notificationItems = synthesizedNotifications;
+
+  const handleAcceptFriendRequest = async (item: AppNotification) => {
+    if (!item.friendRequestId || !user) return;
+    const req = cloudFriendRequests.find((r) => r.id === item.friendRequestId);
+    try {
+      await updateDoc(doc(db, "friendRequests", item.friendRequestId), {
+        status: "accepted",
+        updatedAt: serverTimestamp(),
+      });
+      if (req) {
+        await createConversationBetweenUsers(user, {
+          uid: req.fromUid,
+          lumenId: req.fromLumenId,
+          displayName: req.fromName,
+        });
+      }
+      markNotifRead(item.id);
+      handleOpenChange(false);
+      onRequestCloseSidebar?.();
+      toast.success(`Connected with ${item.senderName || item.peerLumenId || "friend"}!`);
+      nav({ to: "/app/messages" });
+    } catch (err) {
+      console.error("Could not accept friend request:", err);
+      toast.error("Could not accept friend request");
+    }
+  };
+
+  const handleDeclineFriendRequest = async (item: AppNotification) => {
+    if (!item.friendRequestId) return;
+    try {
+      await updateDoc(doc(db, "friendRequests", item.friendRequestId), {
+        status: "declined",
+        updatedAt: serverTimestamp(),
+      });
+      markNotifRead(item.id);
+      toast.success("Friend request declined");
+    } catch (err) {
+      console.error("Could not decline friend request:", err);
+      toast.error("Could not decline friend request");
+    }
+  };
 
   const unreadNotifCount = notificationItems.filter((i) => !i.read).length;
   const totalBadgeCount = unreadNotifCount;
@@ -418,6 +541,8 @@ export function WorkspaceInboxControl({
                         <Megaphone className="h-4 w-4" />
                       ) : item.kind === "system" ? (
                         <FolderLock className="h-4 w-4" />
+                      ) : item.kind === "friend_request" ? (
+                        <UserPlus className="h-4 w-4 text-emerald-400" />
                       ) : (
                         <MessageSquare className="h-4 w-4" />
                       )}
@@ -431,7 +556,7 @@ export function WorkspaceInboxControl({
                           </span>
                           {item.peerLumenId && (
                             <span className="rounded-full bg-glass px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                              {item.peerLumenId}
+                              @{item.peerLumenId}
                             </span>
                           )}
                         </div>
@@ -453,6 +578,27 @@ export function WorkspaceInboxControl({
 
                       {/* Action buttons */}
                       <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                        {item.kind === "friend_request" && (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleAcceptFriendRequest(item)}
+                              className="glass-pill liquid-press inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-3 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/30"
+                            >
+                              <UserCheck className="h-3 w-3" />
+                              <span>Accept Request</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeclineFriendRequest(item)}
+                              className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-destructive"
+                            >
+                              <UserX className="h-3 w-3" />
+                              <span>Decline</span>
+                            </button>
+                          </div>
+                        )}
+
                         {item.kind === "message" && (
                           <button
                             type="button"

@@ -209,5 +209,67 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(expiredStatus.canRename).toBe(true);
     expect(expiredStatus.renamesRemaining).toBeGreaterThan(0);
   });
+
+  it("Google Account Dictionary persists and reuses usernameId across logout and repeated logins", async () => {
+    const {
+      lookupAccountInDictionary,
+      saveAccountToDictionary,
+      listAllDictionaryAccounts,
+      toAppUser,
+      signOut,
+    } = await import("@/lib/auth");
+
+    const email = "nagarajamutha0@gmail.com";
+    const uid = "firebase_test_uid_eshwaran";
+
+    // 1. Initial login for a new Google Account profile generates and stores a randomized username ID
+    const initialUser = toAppUser({
+      uid,
+      email,
+      displayName: "Eshwaran N",
+      photoURL: "https://example.com/avatar.png",
+    } as any);
+
+    expect(initialUser.lumenId).toBeDefined();
+    expect(initialUser.lumenId.length).toBeGreaterThan(0);
+    const assignedUsernameId = initialUser.lumenId;
+
+    // Verify it is saved in the Account Dictionary
+    const entry = lookupAccountInDictionary(email, uid);
+    expect(entry).not.toBeNull();
+    expect(entry?.usernameId).toBe(assignedUsernameId);
+    expect(entry?.displayName).toBe("Eshwaran N");
+
+    // 2. User logs out
+    await signOut();
+
+    // 3. User logs back in with the same Google account
+    const secondLoginUser = toAppUser({
+      uid,
+      email,
+      displayName: "Eshwaran N",
+      photoURL: "https://example.com/avatar.png",
+    } as any);
+
+    // CRITICAL: Username ID must be reused, NOT newly created or regenerated
+    expect(secondLoginUser.lumenId).toBe(assignedUsernameId);
+
+    // 4. Multiple logouts and logins still return the exact same usernameId
+    await signOut();
+    const thirdLoginUser = toAppUser({
+      uid,
+      email,
+      displayName: "Eshwaran N",
+      photoURL: "https://example.com/avatar.png",
+    } as any);
+    expect(thirdLoginUser.lumenId).toBe(assignedUsernameId);
+
+    // 5. Account Dictionary lists all registered user accounts for discovery and search
+    const allAccounts = listAllDictionaryAccounts();
+    const found = allAccounts.find((acc) => acc.email === email);
+    expect(found).toBeDefined();
+    expect(found?.usernameId).toBe(assignedUsernameId);
+  });
 });
+
 

@@ -9,7 +9,11 @@ import {
   setDoc,
   where,
 } from "firebase/firestore";
-import { type AppUser, readClaimedUsernamesMap } from "@/lib/auth";
+import {
+  type AppUser,
+  listAllDictionaryAccounts,
+  readClaimedUsernamesMap,
+} from "@/lib/auth";
 import {
   auth,
   BLUEPRINT_LIMITS,
@@ -93,6 +97,39 @@ export async function searchUsersInFirestore(
 
   const isCloud = Boolean(currentUser?.isCloudUser || auth.currentUser);
 
+  // 0. Search the Google Account Dictionary for instant matches
+  try {
+    const dictList = listAllDictionaryAccounts();
+    for (const entry of dictList) {
+      const entryId = normalizeLumenId(entry.usernameId);
+      const entryLower = entryId.toLowerCase();
+      const nameLower = entry.displayName.toLowerCase();
+      const emailLower = entry.email.toLowerCase();
+      const matchesId =
+        entryLower === lower ||
+        entryLower === queryClean ||
+        entryLower === normalizedId.toLowerCase() ||
+        entryId.toLowerCase().includes(lower) ||
+        entryId.toLowerCase().includes(queryClean);
+      const matchesName =
+        nameLower.includes(lower) ||
+        nameLower.includes(queryClean) ||
+        emailLower.includes(lower) ||
+        emailLower.includes(queryClean);
+
+      if (matchesId || matchesName) {
+        addCandidate({
+          uid: entry.uid,
+          lumenId: entry.usernameId,
+          displayName: entry.displayName || `User ${entry.usernameId}`,
+          handle: `@${entry.usernameId.toLowerCase()}`,
+          photoURL: entry.photoURL || "",
+          isDirectIdMatch: matchesId,
+        });
+      }
+    }
+  } catch {}
+
   if (isCloud) {
     // 1. Direct lookup by unique User ID in userDirectory/{lumenId}
     if (normalizedId.length >= 3) {
@@ -106,9 +143,14 @@ export async function searchUsersInFirestore(
         }
         if (dirSnap.exists()) {
           const d = dirSnap.data();
-          const uid = sanitizeId(String(d.uid ?? `usr_${normalizedId}`));
           const lumenId = String(d.lumenId ?? normalizedId);
-          const displayName = String(d.displayName ?? `User ${lumenId}`);
+          // Check if dictionary has the real auth UID for this user ID
+          const dictMatch = listAllDictionaryAccounts().find(
+            (a) => a.usernameId.toLowerCase() === lumenId.toLowerCase(),
+          );
+          const rawUid = String(d.uid ?? "");
+          const uid = sanitizeId(dictMatch?.uid || (rawUid && !rawUid.startsWith("usr_") ? rawUid : dictMatch?.uid || rawUid || `usr_${normalizedId}`));
+          const displayName = String(d.displayName ?? dictMatch?.displayName ?? `User ${lumenId}`);
           const handle = String(
             d.handle ?? `@${displayName.toLowerCase().replace(/[^a-z0-9]+/g, ".")}`,
           );
@@ -117,7 +159,8 @@ export async function searchUsersInFirestore(
             lumenId,
             displayName,
             handle,
-            photoURL: "",
+            photoURL: dictMatch?.photoURL || "",
+            isDirectIdMatch: true,
           });
         }
       } catch {

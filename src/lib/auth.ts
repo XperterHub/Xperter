@@ -142,6 +142,106 @@ export function getRememberedUsername(): string {
   }
 }
 
+export const ACCOUNT_DICTIONARY_KEY = "xperter.google_account_dictionary.v2";
+
+export interface AccountDictionaryEntry {
+  uid: string;
+  email: string;
+  usernameId: string;
+  displayName: string;
+  photoURL?: string;
+  createdAtMs: number;
+}
+
+export function readAccountDictionary(): Record<string, AccountDictionaryEntry> {
+  try {
+    const raw = getLocalStorage().getItem(ACCOUNT_DICTIONARY_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function lookupAccountInDictionary(
+  email?: string | null,
+  uid?: string | null,
+): AccountDictionaryEntry | null {
+  const dict = readAccountDictionary();
+  const cleanEmail = (email || "").trim().toLowerCase();
+  const cleanUid = uid ? sanitizeId(uid) : "";
+
+  if (cleanEmail && dict[`email:${cleanEmail}`]) {
+    return dict[`email:${cleanEmail}`];
+  }
+  if (cleanUid && dict[`uid:${cleanUid}`]) {
+    return dict[`uid:${cleanUid}`];
+  }
+
+  for (const entry of Object.values(dict)) {
+    if (cleanEmail && entry.email && entry.email.toLowerCase() === cleanEmail) {
+      return entry;
+    }
+    if (cleanUid && entry.uid && entry.uid === cleanUid) {
+      return entry;
+    }
+  }
+
+  return null;
+}
+
+export function saveAccountToDictionary(entry: AccountDictionaryEntry): void {
+  try {
+    const dict = readAccountDictionary();
+    const cleanEmail = entry.email.trim().toLowerCase();
+    const cleanUid = sanitizeId(entry.uid);
+    const normalizedId = sanitizeUsernameId(entry.usernameId);
+
+    const fullEntry: AccountDictionaryEntry = {
+      ...entry,
+      email: cleanEmail,
+      uid: cleanUid,
+      usernameId: normalizedId,
+    };
+
+    if (cleanEmail) {
+      dict[`email:${cleanEmail}`] = fullEntry;
+    }
+    if (cleanUid) {
+      dict[`uid:${cleanUid}`] = fullEntry;
+    }
+    dict[`id:${normalizedId.toLowerCase()}`] = fullEntry;
+
+    getLocalStorage().setItem(ACCOUNT_DICTIONARY_KEY, JSON.stringify(dict));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function listAllDictionaryAccounts(): AccountDictionaryEntry[] {
+  const dict = readAccountDictionary();
+  const uniqueMap = new Map<string, AccountDictionaryEntry>();
+  for (const entry of Object.values(dict)) {
+    if (entry && entry.usernameId) {
+      uniqueMap.set(entry.usernameId.toLowerCase(), entry);
+    }
+  }
+  return Array.from(uniqueMap.values());
+}
+
+export function generateRandomizedUsernameId(uid?: string): string {
+  if (uid) {
+    return deriveLumenId(uid);
+  }
+  const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `LMN-${code}`;
+}
+
 export function readClaimedUsernamesMap(): Record<string, string> {
   try {
     const raw = getLocalStorage().getItem(CLAIMED_USERNAMES_KEY);
@@ -331,14 +431,16 @@ function readLocalUser(): AppUser | null {
     const parsed = JSON.parse(raw) as Partial<AppUser>;
     if (!parsed || typeof parsed.email !== "string" || !parsed.email) return null;
     const email = parsed.email.slice(0, BLUEPRINT_LIMITS.MAX_EMAIL_LENGTH);
+    const cleanEmail = email.toLowerCase().trim();
     const fallbackName = email.split("@")[0] || "Lumen User";
-    const uid = sanitizeId(parsed.uid || `usr_${email.toLowerCase()}`);
+    const uid = sanitizeId(parsed.uid || `usr_${cleanEmail}`);
     const override = readProfileOverride(uid);
     const name = (override.name || parsed.name || fallbackName)
       .trim()
       .slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
+    const dictEntry = lookupAccountInDictionary(cleanEmail, uid);
     const lumenId = sanitizeUsernameId(
-      override.lumenId || parsed.lumenId || deriveLumenId(uid),
+      dictEntry?.usernameId || override.lumenId || parsed.lumenId || deriveLumenId(uid),
     );
     const photoURL =
       typeof override.photoURL === "string"
@@ -393,8 +495,10 @@ function writeLocalUser(user: AppUser | null, rememberMe = true) {
   notifyLocalAuthListeners();
 }
 
-function toAppUser(u: FirebaseUser): AppUser {
-  const email = (u.email || "user@lumen.app").slice(0, BLUEPRINT_LIMITS.MAX_EMAIL_LENGTH);
+export function toAppUser(u: FirebaseUser): AppUser {
+  const rawEmail = u.email || "user@lumen.app";
+  const email = rawEmail.slice(0, BLUEPRINT_LIMITS.MAX_EMAIL_LENGTH);
+  const cleanEmail = email.toLowerCase().trim();
   const fallbackName = email.split("@")[0] || "Lumen User";
   const uid = sanitizeId(u.uid);
   const override = readProfileOverride(uid);
@@ -404,13 +508,31 @@ function toAppUser(u: FirebaseUser): AppUser {
   const rawPhoto =
     override.photoURL !== undefined ? override.photoURL : u.photoURL || "";
   const photoURL = rawPhoto.slice(0, BLUEPRINT_LIMITS.MAX_PHOTO_URL_LENGTH);
-  const lumenId = sanitizeUsernameId(override.lumenId || deriveLumenId(uid)) || deriveLumenId(uid);
-  const isConfirmed =
-    override.usernameConfirmed === true ||
-    Boolean(override.lumenId) ||
-    (typeof window !== "undefined" &&
-      (window.localStorage.getItem(`xperter.username.confirmed.${uid}`) === "true" ||
-       window.localStorage.getItem(`lumen.username.confirmed.${uid}`) === "true"));
+
+  // 1. Look up in Google Account Dictionary first!
+  const dictEntry = lookupAccountInDictionary(cleanEmail, uid);
+
+  let lumenId = "";
+  if (dictEntry && dictEntry.usernameId) {
+    // REUSE the stored username ID from the dictionary!
+    lumenId = dictEntry.usernameId;
+  } else if (override.lumenId) {
+    lumenId = sanitizeUsernameId(override.lumenId);
+  } else {
+    // Generate a randomized username ID and immediately store it in the dictionary
+    lumenId = generateRandomizedUsernameId(uid);
+  }
+
+  // Save to dictionary to ensure it is forever reused on logout & login
+  saveAccountToDictionary({
+    uid,
+    email: cleanEmail,
+    usernameId: lumenId,
+    displayName: name || "Lumen User",
+    photoURL,
+    createdAtMs: dictEntry?.createdAtMs || Date.now(),
+  });
+  saveClaimedUsername(lumenId, uid);
 
   return {
     uid,
@@ -419,7 +541,7 @@ function toAppUser(u: FirebaseUser): AppUser {
     email,
     photoURL,
     isCloudUser: true,
-    usernameConfirmed: isConfirmed,
+    usernameConfirmed: true,
   };
 }
 
@@ -476,6 +598,14 @@ export async function syncUserProfileToFirestore(
         });
         markUsernameConfirmed(appUser.uid, appUser.lumenId);
         appUser.usernameConfirmed = true;
+        saveAccountToDictionary({
+          uid: appUser.uid,
+          email: appUser.email,
+          usernameId: appUser.lumenId,
+          displayName: appUser.name,
+          photoURL: appUser.photoURL,
+          createdAtMs: Date.now(),
+        });
       } catch (err) {
         console.warn("Could not create cloud profile, keeping local:", err);
       }
@@ -485,6 +615,16 @@ export async function syncUserProfileToFirestore(
       markUsernameConfirmed(appUser.uid, confirmedId);
       appUser.usernameConfirmed = true;
       appUser.lumenId = confirmedId;
+      writeProfileOverride(appUser.uid, { lumenId: confirmedId });
+      saveClaimedUsername(confirmedId, appUser.uid);
+      saveAccountToDictionary({
+        uid: appUser.uid,
+        email: appUser.email,
+        usernameId: confirmedId,
+        displayName: appUser.name,
+        photoURL: appUser.photoURL,
+        createdAtMs: Date.now(),
+      });
 
       // If cloud has a custom lumenId and local override wasn't set yet, adopt cloud's lumenId
       const override = readProfileOverride(appUser.uid);
@@ -807,6 +947,14 @@ export async function updateUserProfile(updates: {
     usernameConfirmed: true,
   });
   saveClaimedUsername(nextLumenId, current.uid);
+  saveAccountToDictionary({
+    uid: current.uid,
+    email: current.email,
+    usernameId: nextLumenId,
+    displayName: nextName,
+    photoURL: nextPhotoURL,
+    createdAtMs: Date.now(),
+  });
 
   if (auth.currentUser) {
     // If the user changed their unique lumenId, remove their old directory entry first
