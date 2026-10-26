@@ -47,6 +47,7 @@ import {
 } from "firebase/firestore";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import * as RadixDialog from "@radix-ui/react-dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { GlassCard } from "@/components/GlassCard";
 import {
@@ -2361,75 +2362,80 @@ function Messages() {
           </ul>
         )}
 
-        {/* Bottom-Right + Button with WhatsApp-style Action Menu */}
+        {/* Bottom-Right + Button */}
         <div className="absolute bottom-3.5 right-3.5 z-30">
-          <Popover open={newChatOpen} onOpenChange={handleNewChatOpenChange}>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                title={newChatOpen ? "Close menu" : "New chat or actions"}
-                aria-label={newChatOpen ? "Close menu" : "New chat or actions"}
-                className="group glass settings-trigger-btn relative z-30 flex h-11 w-11 items-center justify-center rounded-full text-foreground/90 hover:text-foreground"
-              >
-                <Plus
-                  className={`h-5 w-5 transition-transform duration-300 ${
-                    newChatOpen ? "rotate-45" : "rotate-0"
-                  }`}
-                />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              align="end"
-              sideOffset={12}
-              collisionPadding={12}
-              updatePositionStrategy="always"
-              aria-labelledby="new-chat-menu-title"
-              className="settings-popover glass z-[70] w-80 max-w-[calc(100vw-2.5rem)] rounded-[1.75rem] p-4 text-foreground shadow-2xl backdrop-blur-2xl"
+          <button
+            type="button"
+            onClick={() => handleNewChatOpenChange(true)}
+            title="New conversation & actions"
+            aria-label="New conversation & actions"
+            className="group glass settings-trigger-btn relative z-30 flex h-11 w-11 items-center justify-center rounded-full text-foreground/90 hover:text-foreground"
+          >
+            <Plus
+              className={`h-5 w-5 transition-transform duration-300 ${
+                newChatOpen ? "rotate-45" : "rotate-0"
+              }`}
+            />
+          </button>
+        </div>
+
+        {/* Big Centered Modal Popup */}
+        <RadixDialog.Root open={newChatOpen} onOpenChange={handleNewChatOpenChange}>
+          <RadixDialog.Portal>
+            <RadixDialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[75] animate-in fade-in duration-200" />
+            <RadixDialog.Content
+              aria-describedby="new-chat-dialog-desc"
+              className="settings-popover glass fixed left-1/2 top-1/2 z-[80] flex max-h-[88dvh] w-[min(94vw,42rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto glass-scroll rounded-[2.5rem] border border-glass-edge p-6 text-foreground outline-none shadow-2xl backdrop-blur-2xl sm:p-7"
             >
               {newChatMode === "menu" && (
-                <div>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h2 id="new-chat-menu-title" className="text-sm font-semibold tracking-tight text-foreground">
-                      New conversation
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={() => handleNewChatOpenChange(false)}
-                      aria-label="Close"
-                      title="Close"
-                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground outline-none hover:text-foreground"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                <div className="flex flex-col min-h-0">
+                  <div className="flex items-center justify-between border-b border-glass-edge pb-4">
+                    <div>
+                      <RadixDialog.Title className="text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
+                        New conversation
+                      </RadixDialog.Title>
+                      <RadixDialog.Description id="new-chat-dialog-desc" className="mt-1 text-xs text-muted-foreground sm:text-sm">
+                        Search contacts or choose an action below to start collaborating
+                      </RadixDialog.Description>
+                    </div>
+                    <RadixDialog.Close asChild>
+                      <button
+                        type="button"
+                        aria-label="Close"
+                        title="Close"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground outline-none hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </RadixDialog.Close>
                   </div>
 
-                  {/* Top Search bar - matches Screenshot 4 */}
-                  <div className="relative mb-3">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-emerald-400" />
+                  {/* Big Search Bar - matches Screenshot 4 */}
+                  <div className="relative mt-5 mb-4">
+                    <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-emerald-400" />
                     <input
                       value={popupSearch}
                       onChange={(e) => setPopupSearch(e.target.value)}
                       placeholder="Search name, number or @username"
                       aria-label="Search name, number or @username"
-                      className="glass-input w-full rounded-full py-2 pl-9 pr-7 text-xs text-foreground outline-none ring-1 ring-emerald-500/30 transition-all focus:ring-emerald-500/70 placeholder:text-muted-foreground/60"
+                      className="glass-input h-12 w-full rounded-2xl pl-11 pr-10 text-sm text-foreground outline-none ring-1 ring-emerald-500/35 transition-all focus:ring-emerald-500/80 placeholder:text-muted-foreground/60 shadow-inner"
                     />
                     {popupSearch && (
                       <button
                         type="button"
                         onClick={() => setPopupSearch("")}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                       >
-                        <X className="h-3 w-3" />
+                        <X className="h-4 w-4" />
                       </button>
                     )}
                   </div>
 
                   {/* Search Results (if typing in search) */}
                   {popupSearch.trim().length > 0 ? (
-                    <div className="glass-scroll max-h-56 space-y-1 overflow-y-auto pr-1">
+                    <div className="glass-scroll max-h-[46vh] space-y-1.5 overflow-y-auto pr-1">
                       {popupMatchingContacts.length === 0 ? (
-                        <div className="py-6 text-center text-xs text-muted-foreground">
+                        <div className="py-12 text-center text-sm text-muted-foreground">
                           No matching contacts found for "{popupSearch}"
                         </div>
                       ) : (
@@ -2441,216 +2447,335 @@ function Messages() {
                               selectChat(contact.id);
                               handleNewChatOpenChange(false);
                             }}
-                            className="flex w-full items-center gap-3 rounded-xl p-2 text-left transition-colors hover:bg-foreground/5"
+                            className="flex w-full items-center gap-3.5 rounded-2xl p-3 text-left transition-colors hover:bg-foreground/5 border border-transparent hover:border-glass-edge"
                           >
                             <Avatar name={contact.name} online={resolveContactOnline(contact)} isGroup={contact.isGroup} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs font-medium text-foreground">{contact.name}</p>
-                              <p className="truncate font-mono text-[11px] text-muted-foreground">{contact.handle}</p>
+                              <p className="truncate text-sm font-medium text-foreground">{contact.name}</p>
+                              <p className="truncate font-mono text-xs text-muted-foreground">{contact.handle}</p>
                             </div>
+                            <span className="btn-ink rounded-full px-3 py-1 text-xs font-medium">Chat</span>
                           </button>
                         ))
                       )}
                     </div>
                   ) : (
-                    /* Default 3 Menu Actions matching Screenshot 4 with custom emerald icons */
-                    <div className="space-y-1.5">
+                    /* Big Action Cards matching Screenshot 4 with custom emerald icons */
+                    <div className="space-y-3 pt-1">
                       <button
                         type="button"
                         onClick={() => setNewChatMode("group")}
-                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
                       >
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
-                          <Users className="h-5 w-5" />
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                          <Users className="h-6 w-6" />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-foreground">New group</p>
-                          <p className="text-xs text-muted-foreground">Create a multi-member chat</p>
+                          <p className="text-base font-semibold text-foreground">New group</p>
+                          <p className="text-xs text-muted-foreground sm:text-sm">Create a multi-member chat with team members</p>
                         </div>
+                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setNewChatMode("friend")}
-                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
                       >
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
-                          <UserPlus className="h-5 w-5" />
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                          <UserPlus className="h-6 w-6" />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-foreground">New contact</p>
-                          <p className="text-xs text-muted-foreground">Add friend by Unique User ID</p>
+                          <p className="text-base font-semibold text-foreground">New contact</p>
+                          <p className="text-xs text-muted-foreground sm:text-sm">Add friend by Unique User ID (@LMN-...)</p>
                         </div>
+                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setNewChatMode("announcement")}
-                        className="group flex w-full items-center gap-3.5 rounded-2xl p-2.5 text-left transition-colors hover:bg-foreground/5"
+                        className="group flex w-full items-center gap-4 rounded-2xl border border-glass-edge bg-glass/40 p-4 text-left transition-all hover:bg-glass hover:border-emerald-500/30 hover:shadow-md"
                       >
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-transform duration-200 group-hover:scale-105">
-                          <Megaphone className="h-5 w-5" />
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-md shadow-emerald-500/25 transition-transform duration-200 group-hover:scale-110">
+                          <Megaphone className="h-6 w-6" />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-foreground">New announcement</p>
-                          <p className="text-xs text-muted-foreground">Broadcast updates to workspace</p>
+                          <p className="text-base font-semibold text-foreground">New announcement</p>
+                          <p className="text-xs text-muted-foreground sm:text-sm">Broadcast updates and notices to the workspace</p>
                         </div>
+                        <span className="text-muted-foreground group-hover:text-foreground text-sm font-medium">→</span>
                       </button>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Add Friend Form */}
+              {/* Big Add Friend Form */}
               {newChatMode === "friend" && (
-                <div>
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col min-h-0">
+                  <div className="flex items-center justify-between border-b border-glass-edge pb-4">
+                    <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={() => setNewChatMode("menu")}
                         aria-label="Back to menu"
-                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                       >
                         <ArrowLeft className="h-4 w-4" />
                       </button>
-                      <h2 className="text-sm font-semibold text-foreground">Add Friend</h2>
+                      <div>
+                        <RadixDialog.Title className="text-xl font-semibold text-foreground sm:text-2xl">
+                          Add Friend by User ID
+                        </RadixDialog.Title>
+                        <RadixDialog.Description className="mt-0.5 text-xs text-muted-foreground sm:text-sm">
+                          Enter your friend's unique ID to send a direct friend request
+                        </RadixDialog.Description>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleNewChatOpenChange(false)}
-                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <RadixDialog.Close asChild>
+                      <button
+                        type="button"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </RadixDialog.Close>
                   </div>
-                  <form onSubmit={handleSendFriendRequest} className="space-y-3">
-                    <input
-                      value={friendTargetId}
-                      onChange={(e) => setFriendTargetId(e.target.value)}
-                      maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
-                      placeholder="Enter friend's User ID (e.g. LMN-CYXEJ4)"
-                      required
-                      autoFocus
-                      className="glass-input w-full rounded-xl px-3.5 py-2.5 font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground/60"
-                    />
-                    <button
-                      type="submit"
-                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
-                    >
-                      <UserPlus className="h-3.5 w-3.5" />
-                      <span>Add Friend</span>
-                    </button>
+
+                  <form onSubmit={handleSendFriendRequest} className="mt-6 space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">
+                        Friend's User ID
+                      </label>
+                      <input
+                        value={friendTargetId}
+                        onChange={(e) => setFriendTargetId(e.target.value)}
+                        maxLength={BLUEPRINT_LIMITS.MAX_LUMEN_ID_LENGTH}
+                        placeholder="e.g. LMN-CYXEJ4 or username"
+                        required
+                        autoFocus
+                        className="glass-input h-12 w-full rounded-2xl px-4 font-mono text-sm outline-none placeholder:font-sans placeholder:text-muted-foreground/60 ring-1 ring-glass-edge focus:ring-primary"
+                      />
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        User IDs are case-insensitive and allow private connections without sharing phone numbers or personal emails.
+                      </p>
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="submit"
+                        className="btn-ink liquid-press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full text-sm font-medium"
+                      >
+                        <UserPlus className="h-4 w-4" />
+                        <span>Send Friend Request</span>
+                      </button>
+                    </div>
                   </form>
+
+                  {/* Pending Incoming Friend Requests */}
+                  {friendRequests.filter(
+                    (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                  ).length > 0 && (
+                    <div className="mt-6 border-t border-glass-edge pt-4">
+                      <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                        Incoming Requests ({friendRequests.filter(
+                          (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                        ).length})
+                      </h4>
+                      <div className="space-y-2.5">
+                        {friendRequests
+                          .filter(
+                            (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                          )
+                          .map((req) => (
+                            <div
+                              key={req.id}
+                              className="flex items-center justify-between gap-3 rounded-2xl border border-glass-edge bg-glass/40 p-3.5"
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-medium text-foreground">{req.fromName}</p>
+                                <p className="truncate font-mono text-xs text-muted-foreground">@{req.fromLumenId}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => acceptFriendRequestAndStartConvo(req)}
+                                  className="btn-ink rounded-full px-3.5 py-1.5 text-xs font-medium"
+                                >
+                                  Accept
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => removeFriendRequest(req)}
+                                  className="settings-trigger-btn flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                                  title="Decline"
+                                  aria-label="Decline"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Create Group Form */}
+              {/* Big Create Group Form */}
               {newChatMode === "group" && (
-                <div>
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col min-h-0">
+                  <div className="flex items-center justify-between border-b border-glass-edge pb-4">
+                    <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={() => setNewChatMode("menu")}
                         aria-label="Back to menu"
-                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                       >
                         <ArrowLeft className="h-4 w-4" />
                       </button>
-                      <h2 className="text-sm font-semibold text-foreground">Create Group</h2>
+                      <div>
+                        <RadixDialog.Title className="text-xl font-semibold text-foreground sm:text-2xl">
+                          Create New Group
+                        </RadixDialog.Title>
+                        <RadixDialog.Description className="mt-0.5 text-xs text-muted-foreground sm:text-sm">
+                          Create a shared conversation space for your team or project
+                        </RadixDialog.Description>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleNewChatOpenChange(false)}
-                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <RadixDialog.Close asChild>
+                      <button
+                        type="button"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </RadixDialog.Close>
                   </div>
-                  <form onSubmit={createNewChat} className="space-y-3">
-                    <input
-                      value={newChatName}
-                      onChange={(e) => setNewChatName(e.target.value)}
-                      maxLength={BLUEPRINT_LIMITS.MAX_NAME_LENGTH}
-                      placeholder="Group name (e.g. Design Team)"
-                      required
-                      autoFocus
-                      className="glass-input w-full rounded-xl px-3.5 py-2.5 text-xs outline-none placeholder:text-muted-foreground/60"
-                    />
-                    <button
-                      type="submit"
-                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
-                    >
-                      <Users className="h-3.5 w-3.5" />
-                      <span>Create Group</span>
-                    </button>
+
+                  <form onSubmit={createNewChat} className="mt-6 space-y-4">
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">
+                        Group Name
+                      </label>
+                      <input
+                        value={newChatName}
+                        onChange={(e) => setNewChatName(e.target.value)}
+                        maxLength={BLUEPRINT_LIMITS.MAX_NAME_LENGTH}
+                        placeholder="e.g. Design Studio, Alpha Launch, Marketing"
+                        required
+                        autoFocus
+                        className="glass-input h-12 w-full rounded-2xl px-4 text-sm outline-none placeholder:text-muted-foreground/60 ring-1 ring-glass-edge focus:ring-primary"
+                      />
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="submit"
+                        className="btn-ink liquid-press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full text-sm font-medium"
+                      >
+                        <Users className="h-4 w-4" />
+                        <span>Create Group</span>
+                      </button>
+                    </div>
                   </form>
                 </div>
               )}
 
-              {/* Create Announcement Form */}
+              {/* Big Create Announcement Form */}
               {newChatMode === "announcement" && (
-                <div>
-                  <div className="mb-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col min-h-0">
+                  <div className="flex items-center justify-between border-b border-glass-edge pb-4">
+                    <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={() => setNewChatMode("menu")}
                         aria-label="Back to menu"
-                        className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                       >
                         <ArrowLeft className="h-4 w-4" />
                       </button>
-                      <h2 className="text-sm font-semibold text-foreground">New Announcement</h2>
+                      <div>
+                        <RadixDialog.Title className="text-xl font-semibold text-foreground sm:text-2xl">
+                          Create Announcement
+                        </RadixDialog.Title>
+                        <RadixDialog.Description className="mt-0.5 text-xs text-muted-foreground sm:text-sm">
+                          Broadcast platform notes or security alerts to all workspace users
+                        </RadixDialog.Description>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleNewChatOpenChange(false)}
-                      className="settings-trigger-btn flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <RadixDialog.Close asChild>
+                      <button
+                        type="button"
+                        className="settings-trigger-btn flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </RadixDialog.Close>
                   </div>
-                  <form onSubmit={handlePublishAnnouncementFromPopup} className="space-y-2.5">
-                    <input
-                      value={announcementTitle}
-                      onChange={(e) => setAnnouncementTitle(e.target.value)}
-                      placeholder="Announcement title…"
-                      required
-                      autoFocus
-                      className="glass-input w-full rounded-xl px-3.5 py-2 text-xs outline-none placeholder:text-muted-foreground/60"
-                    />
-                    <select
-                      value={announcementCategory}
-                      onChange={(e) => setAnnouncementCategory(e.target.value as AnnouncementCategory)}
-                      className="glass-input w-full rounded-xl px-3 py-2 text-xs text-foreground outline-none"
-                    >
-                      <option value="update">Platform Update</option>
-                      <option value="feature">New Feature</option>
-                      <option value="security">Security Notice</option>
-                    </select>
-                    <textarea
-                      value={announcementSummary}
-                      onChange={(e) => setAnnouncementSummary(e.target.value)}
-                      placeholder="Announcement message to all workspace users…"
-                      required
-                      rows={3}
-                      className="glass-input w-full resize-none rounded-xl px-3.5 py-2 text-xs outline-none placeholder:text-muted-foreground/60"
-                    />
-                    <button
-                      type="submit"
-                      className="btn-ink liquid-press inline-flex w-full items-center justify-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-medium"
-                    >
-                      <Megaphone className="h-3.5 w-3.5" />
-                      <span>Broadcast Announcement</span>
-                    </button>
+
+                  <form onSubmit={handlePublishAnnouncementFromPopup} className="mt-6 space-y-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="sm:col-span-2">
+                        <label className="block text-xs font-medium text-foreground mb-1.5">
+                          Title
+                        </label>
+                        <input
+                          value={announcementTitle}
+                          onChange={(e) => setAnnouncementTitle(e.target.value)}
+                          placeholder="e.g. Platform 2.5 Release Notes"
+                          required
+                          autoFocus
+                          className="glass-input h-11 w-full rounded-xl px-3.5 text-xs outline-none placeholder:text-muted-foreground/60"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-foreground mb-1.5">
+                          Category
+                        </label>
+                        <select
+                          value={announcementCategory}
+                          onChange={(e) => setAnnouncementCategory(e.target.value as AnnouncementCategory)}
+                          className="glass-input h-11 w-full rounded-xl px-3 text-xs text-foreground outline-none"
+                        >
+                          <option value="update">Platform Update</option>
+                          <option value="feature">New Feature</option>
+                          <option value="security">Security Notice</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-foreground mb-1.5">
+                        Announcement Summary &amp; Details
+                      </label>
+                      <textarea
+                        value={announcementSummary}
+                        onChange={(e) => setAnnouncementSummary(e.target.value)}
+                        placeholder="Write the message that will be broadcasted to all workspace inboxes..."
+                        required
+                        rows={4}
+                        className="glass-input w-full resize-none rounded-xl p-3.5 text-xs outline-none placeholder:text-muted-foreground/60 leading-relaxed"
+                      />
+                    </div>
+
+                    <div className="pt-2">
+                      <button
+                        type="submit"
+                        className="btn-ink liquid-press inline-flex h-12 w-full items-center justify-center gap-2 rounded-full text-sm font-medium"
+                      >
+                        <Megaphone className="h-4 w-4" />
+                        <span>Broadcast Announcement</span>
+                      </button>
+                    </div>
                   </form>
                 </div>
               )}
-            </PopoverContent>
-          </Popover>
-        </div>
+            </RadixDialog.Content>
+          </RadixDialog.Portal>
+        </RadixDialog.Root>
       </GlassCard>
 
       {/* Right Chatting Bar */}
