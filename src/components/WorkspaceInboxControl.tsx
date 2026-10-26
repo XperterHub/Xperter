@@ -217,7 +217,7 @@ export function WorkspaceInboxControl({
     };
   }, [user]);
 
-  // Subscribe in real-time to incoming friend requests directed to current user
+  // Subscribe in real-time to incoming friend requests directed to current user (both Firestore and Shared Realtime store)
   const [cloudFriendRequests, setCloudFriendRequests] = useState<Array<{
     id: string;
     fromUid: string;
@@ -238,14 +238,52 @@ export function WorkspaceInboxControl({
 
     let uidList: typeof cloudFriendRequests = [];
     let lumenIdList: typeof cloudFriendRequests = [];
+    let sharedList: typeof cloudFriendRequests = [];
 
     const mergeRequests = () => {
       const byId = new Map<string, typeof cloudFriendRequests[0]>();
-      for (const req of [...uidList, ...lumenIdList]) {
+      for (const req of [...sharedList, ...uidList, ...lumenIdList]) {
         byId.set(req.id, req);
       }
-      setCloudFriendRequests(Array.from(byId.values()));
+      setCloudFriendRequests(Array.from(byId.values()).filter((r) => r.status === "pending"));
     };
+
+    // Load initial shared requests
+    import("@/lib/realtime-sync").then(({ getSharedFriendRequestsForUser }) => {
+      sharedList = getSharedFriendRequestsForUser(user.lumenId, user.uid).map((r) => ({
+        id: r.id,
+        fromUid: r.fromUid,
+        fromLumenId: r.fromLumenId,
+        fromName: r.fromName,
+        toUid: r.toUid,
+        toLumenId: r.toLumenId,
+        toName: r.toName,
+        status: r.status,
+        createdAtMs: r.createdAtMs,
+      }));
+      mergeRequests();
+    });
+
+    // Subscribe to realtime broadcast events
+    let unsubBroadcast: (() => void) | undefined;
+    import("@/lib/realtime-sync").then(({ subscribeToRealtimeEvents, getSharedFriendRequestsForUser }) => {
+      unsubBroadcast = subscribeToRealtimeEvents((event) => {
+        if (event.type === "FRIEND_REQUEST_SENT" || event.type === "FRIEND_REQUEST_UPDATED") {
+          sharedList = getSharedFriendRequestsForUser(user.lumenId, user.uid).map((r) => ({
+            id: r.id,
+            fromUid: r.fromUid,
+            fromLumenId: r.fromLumenId,
+            fromName: r.fromName,
+            toUid: r.toUid,
+            toLumenId: r.toLumenId,
+            toName: r.toName,
+            status: r.status,
+            createdAtMs: r.createdAtMs,
+          }));
+          mergeRequests();
+        }
+      });
+    });
 
     const parseReq = (d: any, id: string) => {
       const ts = d.createdAt as Timestamp | undefined;
@@ -289,6 +327,7 @@ export function WorkspaceInboxControl({
     );
 
     return () => {
+      unsubBroadcast?.();
       unsubUid();
       unsubLumen();
     };
@@ -320,11 +359,19 @@ export function WorkspaceInboxControl({
   const handleAcceptFriendRequest = async (item: AppNotification) => {
     if (!item.friendRequestId || !user) return;
     const req = cloudFriendRequests.find((r) => r.id === item.friendRequestId);
+
     try {
-      await updateDoc(doc(db, "friendRequests", item.friendRequestId), {
+      // 1. Update shared realtime store immediately
+      const { updateSharedFriendRequestStatus } = await import("@/lib/realtime-sync");
+      updateSharedFriendRequestStatus(item.friendRequestId, "accepted");
+
+      // 2. Update in Firestore
+      void updateDoc(doc(db, "friendRequests", item.friendRequestId), {
         status: "accepted",
         updatedAt: serverTimestamp(),
-      });
+      }).catch(() => {});
+
+      // 3. Create conversation between both users
       if (req) {
         await createConversationBetweenUsers(user, {
           uid: req.fromUid,
@@ -332,6 +379,7 @@ export function WorkspaceInboxControl({
           displayName: req.fromName,
         });
       }
+
       markNotifRead(item.id);
       handleOpenChange(false);
       onRequestCloseSidebar?.();
@@ -346,10 +394,14 @@ export function WorkspaceInboxControl({
   const handleDeclineFriendRequest = async (item: AppNotification) => {
     if (!item.friendRequestId) return;
     try {
-      await updateDoc(doc(db, "friendRequests", item.friendRequestId), {
+      const { updateSharedFriendRequestStatus } = await import("@/lib/realtime-sync");
+      updateSharedFriendRequestStatus(item.friendRequestId, "declined");
+
+      void updateDoc(doc(db, "friendRequests", item.friendRequestId), {
         status: "declined",
         updatedAt: serverTimestamp(),
-      });
+      }).catch(() => {});
+
       markNotifRead(item.id);
       toast.success("Friend request declined");
     } catch (err) {

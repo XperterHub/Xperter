@@ -65,6 +65,21 @@ export function buildPairConversationId(uidA: string, uidB: string): string {
   return sanitizeId(`conv_${sorted[0]}_${sorted[1]}`);
 }
 
+export function buildCanonicalConversationId(
+  lumenIdA: string,
+  lumenIdB: string,
+  fallbackUidA?: string,
+  fallbackUidB?: string,
+): string {
+  const normA = normalizeLumenId(lumenIdA).toLowerCase();
+  const normB = normalizeLumenId(lumenIdB).toLowerCase();
+  if (normA && normB && normA !== normB) {
+    const sorted = [normA, normB].sort();
+    return sanitizeId(`conv_${sorted[0]}_${sorted[1]}`);
+  }
+  return buildPairConversationId(fallbackUidA || lumenIdA, fallbackUidB || lumenIdB);
+}
+
 /**
  * Queries the Firestore `users` collection (and `userDirectory` index) by
  * display name or unique user ID (`lumenId` / `uid`) so users can find others
@@ -287,7 +302,12 @@ export async function createConversationBetweenUsers(
   const peerUid = sanitizeId(
     targetUser.uid || `usr_${peerLumenId.toLowerCase()}`,
   );
-  const convId = buildPairConversationId(currentUser.uid, peerUid);
+  const convId = buildCanonicalConversationId(
+    currentUser.lumenId,
+    peerLumenId,
+    currentUser.uid,
+    peerUid,
+  );
   const displayName = (targetUser.displayName.trim() || `User ${peerLumenId}`).slice(
     0,
     BLUEPRINT_LIMITS.MAX_NAME_LENGTH,
@@ -327,6 +347,16 @@ export async function createConversationBetweenUsers(
     lastMessageTime: timeStr,
     updatedAtMs: Date.now(),
   };
+
+  // Always save to shared conversations for immediate cross-tab/local replication
+  try {
+    const { saveSharedConversation } = await import("@/lib/realtime-sync");
+    saveSharedConversation({
+      ...record,
+      participantIds: [currentUser.uid, peerUid],
+      participantLumenIds: [currentUser.lumenId, peerLumenId],
+    });
+  } catch {}
 
   if (!currentUser.isCloudUser) {
     return record;

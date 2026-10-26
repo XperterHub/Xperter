@@ -62,6 +62,19 @@ import {
   type DirectoryUser,
 } from "@/lib/conversations";
 import {
+  broadcastRealtimeEvent,
+  getSharedConversationsForUser,
+  getSharedFriendRequestsForUser,
+  getSharedFriendRequestsSentByUser,
+  readSharedMessages,
+  saveSharedConversation,
+  saveSharedFriendRequest,
+  saveSharedMessage,
+  subscribeToRealtimeEvents,
+  updateSharedFriendRequestStatus,
+  type RealtimeFriendRequest,
+} from "@/lib/realtime-sync";
+import {
   BLUEPRINT_LIMITS,
   db,
   handleFirestoreError,
@@ -721,12 +734,21 @@ function Messages() {
         const parsedMsgs = rawMsgs ? (JSON.parse(rawMsgs) as Record<string, Msg[]>) : {};
         const rawReqs = window.localStorage.getItem(`lumen.requests.${user.uid}`);
         const parsedReqs = rawReqs ? (JSON.parse(rawReqs) as FriendRequestItem[]) : [];
-        setContacts(Array.isArray(parsedChats) ? parsedChats : []);
+
+        // Merge with shared conversations
+        const shared = getSharedConversationsForUser(user.lumenId, user.uid);
+        const byId = new Map<string, Contact>();
+        for (const c of [...parsedChats, ...shared]) {
+          byId.set(c.id, c as Contact);
+        }
+        const loadedChats = Array.from(byId.values());
+
+        setContacts(loadedChats);
         setMessagesByChat(parsedMsgs && typeof parsedMsgs === "object" ? parsedMsgs : {});
         setFriendRequests(Array.isArray(parsedReqs) ? parsedReqs : []);
         setActiveId((prev) => {
-          if (prev && Array.isArray(parsedChats) && parsedChats.some((c) => c.id === prev)) return prev;
-          return Array.isArray(parsedChats) ? (parsedChats[0]?.id ?? null) : null;
+          if (prev && loadedChats.some((c) => c.id === prev)) return prev;
+          return loadedChats[0]?.id ?? null;
         });
       } catch {
         setContacts([]);
@@ -738,6 +760,8 @@ function Messages() {
 
     let ownedList: Contact[] = [];
     let participantList: Contact[] = [];
+    let participantLumenList: Contact[] = [];
+    let sharedList: Contact[] = [];
 
     const mapDocToContact = (docSnap: { id: string; data: () => Record<string, unknown> }): Contact => {
       const d = docSnap.data();
@@ -809,7 +833,7 @@ function Messages() {
 
     const syncMergedContacts = () => {
       const byId = new Map<string, Contact>();
-      for (const item of [...ownedList, ...participantList]) {
+      for (const item of [...ownedList, ...participantList, ...participantLumenList, ...sharedList]) {
         byId.set(item.id, item);
       }
       const loaded = Array.from(byId.values());
@@ -826,6 +850,39 @@ function Messages() {
       });
     };
 
+    // Load initial shared conversations
+    const refreshShared = () => {
+      const shared = getSharedConversationsForUser(user.lumenId, user.uid);
+      sharedList = shared.map((c) => ({
+        id: c.id,
+        name: c.name,
+        handle: c.handle,
+        role: c.role,
+        online: true,
+        isGroup: c.isGroup,
+        memberCount: c.memberCount,
+        pinned: c.pinned,
+        unread: c.unread,
+        pinnedMsgId: c.pinnedMsgId,
+        lastMessageText: c.lastMessageText,
+        lastMessageTime: c.lastMessageTime,
+        updatedAtMs: c.updatedAtMs,
+        participantIds: c.participantIds,
+        participantLumenIds: c.participantLumenIds,
+        peerUserId: c.peerUserId,
+        peerLumenId: c.peerLumenId,
+      }));
+      syncMergedContacts();
+    };
+    refreshShared();
+
+    // Listen to realtime events for immediate cross-tab conversation upsert
+    const unsubRealtime = subscribeToRealtimeEvents((event) => {
+      if (event.type === "CONVERSATION_UPSERTED" || event.type === "FRIEND_REQUEST_UPDATED") {
+        refreshShared();
+      }
+    });
+
     const convOwnerQuery = query(
       collection(db, "conversations"),
       where("ownerId", "==", user.uid),
@@ -834,6 +891,11 @@ function Messages() {
     const convParticipantQuery = query(
       collection(db, "conversations"),
       where("participantIds", "array-contains", user.uid),
+    );
+
+    const convLumenQuery = query(
+      collection(db, "conversations"),
+      where("participantLumenIds", "array-contains", user.lumenId),
     );
 
     const unsubOwner = onSnapshot(
@@ -853,14 +915,23 @@ function Messages() {
         participantList = snapshot.docs.map(mapDocToContact);
         syncMergedContacts();
       },
-      () => {
-        // Ignore if participant query has no matching docs yet
+      () => {},
+    );
+
+    const unsubLumen = onSnapshot(
+      convLumenQuery,
+      (snapshot) => {
+        participantLumenList = snapshot.docs.map(mapDocToContact);
+        syncMergedContacts();
       },
+      () => {},
     );
 
     return () => {
+      unsubRealtime();
       unsubOwner();
       unsubParticipant();
+      unsubLumen();
     };
   }, [authReady, user, directoryUsersCache]);
 
@@ -949,22 +1020,47 @@ function Messages() {
     };
   }, [authReady, user]);
 
-  // Subscribe to incoming and outgoing friend requests in Firestore
+  // Subscribe to incoming and outgoing friend requests (both Firestore and Shared Realtime store)
   useEffect(() => {
-    if (!authReady || !user || !user.isCloudUser) return;
+    if (!authReady || !user) return;
 
     let outgoingList: FriendRequestItem[] = [];
     let incomingList: FriendRequestItem[] = [];
     let incomingLumenList: FriendRequestItem[] = [];
+    let sharedRequests: FriendRequestItem[] = [];
 
     const mergeRequests = () => {
       const byId = new Map<string, FriendRequestItem>();
-      for (const item of [...incomingList, ...incomingLumenList, ...outgoingList]) {
+      for (const item of [...sharedRequests, ...incomingList, ...incomingLumenList, ...outgoingList]) {
         byId.set(item.id, item);
       }
       const merged = Array.from(byId.values()).sort((a, b) => b.createdAtMs - a.createdAtMs);
       setFriendRequests(merged);
     };
+
+    const refreshShared = () => {
+      const inReqs = getSharedFriendRequestsForUser(user.lumenId, user.uid);
+      const outReqs = getSharedFriendRequestsSentByUser(user.lumenId, user.uid);
+      sharedRequests = [...inReqs, ...outReqs].map((r) => ({
+        id: r.id,
+        fromUid: r.fromUid,
+        fromLumenId: r.fromLumenId,
+        fromName: r.fromName,
+        toUid: r.toUid,
+        toLumenId: r.toLumenId,
+        toName: r.toName,
+        status: r.status,
+        createdAtMs: r.createdAtMs,
+      }));
+      mergeRequests();
+    };
+    refreshShared();
+
+    const unsubRealtime = subscribeToRealtimeEvents((ev) => {
+      if (ev.type === "FRIEND_REQUEST_SENT" || ev.type === "FRIEND_REQUEST_UPDATED") {
+        refreshShared();
+      }
+    });
 
     const parseDoc = (docSnap: { id: string; data: () => Record<string, unknown> }): FriendRequestItem => {
       const d = docSnap.data();
@@ -983,6 +1079,10 @@ function Messages() {
         createdAtMs: toMillis(d.createdAt),
       };
     };
+
+    if (!user.isCloudUser) {
+      return () => unsubRealtime();
+    }
 
     const outQuery = query(
       collection(db, "friendRequests"),
@@ -1025,22 +1125,94 @@ function Messages() {
     );
 
     return () => {
+      unsubRealtime();
       unsubOut();
       unsubIn();
       unsubInLumen();
     };
   }, [authReady, user]);
 
-  // Subscribe to messages for the active conversation in Firestore
+  // Subscribe to messages for the active conversation in Firestore and Shared store
   useEffect(() => {
-    if (!authReady || !user || !user.isCloudUser || !activeId) return;
+    if (!authReady || !user || !activeId) return;
 
-    const msgsPath = `conversations/${activeId}/messages`;
+    // Load initial messages from shared storage
+    const rawShared = readSharedMessages(activeId);
+    if (rawShared.length > 0) {
+      const mappedShared: Msg[] = rawShared.map((d: any) => ({
+        id: d.id,
+        me: String(d.senderUid || d.ownerId || "") === user.uid || String(d.senderLumenId || "") === user.lumenId,
+        senderName: String(d.senderName || user.name),
+        dateGroup: String(d.dateGroup || "Today"),
+        kind: d.kind || "text",
+        text: d.text ? String(d.text) : undefined,
+        audio: d.audio || d.audioUrl,
+        audioDuration: d.audioDuration,
+        attachment: d.attachment,
+        poll: d.poll,
+        pollOptionsRaw: d.pollOptionsRaw || [],
+        pollVotesRaw: d.pollVotesRaw || [],
+        reactionsRaw: d.reactionsRaw || [],
+        time: String(d.time || ""),
+        edited: Boolean(d.edited),
+        replyToId: d.replyToId ? String(d.replyToId) : undefined,
+        forwardedFrom: d.forwardedFrom ? String(d.forwardedFrom) : undefined,
+        reactions: d.reactions || {},
+        status: "read",
+        createdAtMs: typeof d.createdAtMs === "number" ? d.createdAtMs : Date.now(),
+      }));
+      setMessagesByChat((prev) => ({ ...prev, [activeId]: mappedShared }));
+    }
+
+    // Subscribe to realtime broadcast events for live message replication
+    const unsubBroadcast = subscribeToRealtimeEvents((event) => {
+      if (event.type === "MESSAGE_SENT" && event.convId === activeId) {
+        const d = event.message;
+        const isFromMe = String(d.senderUid || d.ownerId || "") === user.uid || String(d.senderLumenId || "") === user.lumenId;
+        const nextMsg: Msg = {
+          id: d.id,
+          me: isFromMe,
+          senderName: String(d.senderName || user.name),
+          dateGroup: String(d.dateGroup || "Today"),
+          kind: d.kind || "text",
+          text: d.text ? String(d.text) : undefined,
+          audio: d.audio || d.audioUrl,
+          audioDuration: d.audioDuration,
+          attachment: d.attachment,
+          poll: d.poll,
+          pollOptionsRaw: d.pollOptionsRaw || [],
+          pollVotesRaw: d.pollVotesRaw || [],
+          reactionsRaw: d.reactionsRaw || [],
+          time: String(d.time || ""),
+          edited: Boolean(d.edited),
+          replyToId: d.replyToId ? String(d.replyToId) : undefined,
+          forwardedFrom: d.forwardedFrom ? String(d.forwardedFrom) : undefined,
+          reactions: d.reactions || {},
+          status: "read",
+          createdAtMs: typeof d.createdAtMs === "number" ? d.createdAtMs : Date.now(),
+        };
+
+        setMessagesByChat((prev) => {
+          const currentList = prev[activeId] ?? [];
+          if (currentList.some((m) => m.id === nextMsg.id)) return prev;
+          return { ...prev, [activeId]: [...currentList, nextMsg] };
+        });
+
+        if (!isFromMe) {
+          playNotificationChime();
+        }
+      }
+    });
+
+    if (!user.isCloudUser) {
+      return () => unsubBroadcast();
+    }
+
     const msgsQuery = query(
       collection(db, "conversations", activeId, "messages"),
     );
 
-    const unsub = onSnapshot(
+    const unsubCloud = onSnapshot(
       msgsQuery,
       (snapshot) => {
         const loaded: Msg[] = snapshot.docs.map((docSnap) => {
@@ -1122,7 +1294,10 @@ function Messages() {
       },
     );
 
-    return () => unsub();
+    return () => {
+      unsubBroadcast();
+      unsubCloud();
+    };
   }, [authReady, user, activeId]);
 
   const active = contacts.find((c) => c.id === activeId);
@@ -1143,8 +1318,10 @@ function Messages() {
     const accepted = friendRequests.some(
       (r) =>
         r.status === "accepted" &&
-        ((r.fromUid === user.uid && (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
-         (r.toUid === user.uid && (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
+        (((r.fromUid === user.uid || normalizeLumenId(r.fromLumenId) === user.lumenId) &&
+          (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
+         ((r.toUid === user.uid || normalizeLumenId(r.toLumenId) === user.lumenId) &&
+          (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
     );
     if (accepted) return { locked: false, isIncoming: false, pendingReq: null };
 
@@ -1373,54 +1550,65 @@ function Messages() {
             ? `Attachment: ${payload.attachment?.name ?? ""}`
             : cleanText;
 
-    if (!isCloud) {
-      const localMsg: Msg = {
-        id: msgId,
-        me: true,
-        senderName: user.name,
-        dateGroup: "Today",
-        kind: payload.kind,
-        text: cleanText || undefined,
-        audio: payload.kind === "voice" ? payload.audioUrl : undefined,
-        audioDuration: payload.audioDuration,
-        attachment: payload.attachment,
-        poll:
-          payload.kind === "poll" && cleanPollQuestion
-            ? {
-                question: cleanPollQuestion,
-                options: cleanPollOptions.map((label, idx) => ({
-                  id: `opt-${idx}`,
-                  label,
-                  votes: 0,
-                  votedByMe: false,
-                })),
-              }
-            : undefined,
-        pollOptionsRaw: cleanPollOptions,
-        pollVotesRaw: [],
-        reactionsRaw: [],
-        time: timeStr,
-        edited: false,
-        replyToId: payload.replyToId,
-        forwardedFrom: payload.forwardedFrom,
-        reactions: {},
-        status: "read",
-        createdAtMs: Date.now(),
-      };
-      const existingList = messagesByChat[convId] ?? [];
-      saveLocalMessages(user.uid, { ...messagesByChat, [convId]: [...existingList, localMsg] });
-      const nextContacts = contacts.map((c) =>
-        c.id === convId
+    const localMsg: Msg = {
+      id: msgId,
+      me: true,
+      senderName: user.name,
+      dateGroup: "Today",
+      kind: payload.kind,
+      text: cleanText || undefined,
+      audio: payload.kind === "voice" ? payload.audioUrl : undefined,
+      audioDuration: payload.audioDuration,
+      attachment: payload.attachment,
+      poll:
+        payload.kind === "poll" && cleanPollQuestion
           ? {
-              ...c,
-              lastMessageText: preview.slice(0, BLUEPRINT_LIMITS.MAX_LAST_MESSAGE_TEXT_LENGTH),
-              lastMessageTime: timeStr,
-              unread: 0,
-              updatedAtMs: Date.now(),
+              question: cleanPollQuestion,
+              options: cleanPollOptions.map((label, idx) => ({
+                id: `opt-${idx}`,
+                label,
+                votes: 0,
+                votedByMe: false,
+              })),
             }
-          : c,
-      );
-      saveLocalContacts(user.uid, nextContacts);
+          : undefined,
+      pollOptionsRaw: cleanPollOptions,
+      pollVotesRaw: [],
+      reactionsRaw: [],
+      time: timeStr,
+      edited: false,
+      replyToId: payload.replyToId,
+      forwardedFrom: payload.forwardedFrom,
+      reactions: {},
+      status: "read",
+      createdAtMs: Date.now(),
+    };
+
+    // 1. Immediately save and broadcast to shared store for live cross-tab/local replication
+    saveSharedMessage(convId, {
+      ...localMsg,
+      senderUid: user.uid,
+      senderLumenId: user.lumenId,
+    });
+
+    const existingList = messagesByChat[convId] ?? [];
+    setMessagesByChat((prev) => ({ ...prev, [convId]: [...existingList, localMsg] }));
+    const nextContacts = contacts.map((c) =>
+      c.id === convId
+        ? {
+            ...c,
+            lastMessageText: preview.slice(0, BLUEPRINT_LIMITS.MAX_LAST_MESSAGE_TEXT_LENGTH),
+            lastMessageTime: timeStr,
+            unread: 0,
+            updatedAtMs: Date.now(),
+          }
+        : c,
+    );
+    setContacts(nextContacts);
+    saveLocalContacts(user.uid, nextContacts);
+
+    if (!isCloud) {
+      saveLocalMessages(user.uid, { ...messagesByChat, [convId]: [...existingList, localMsg] });
       return;
     }
 
@@ -1711,33 +1899,6 @@ function Messages() {
       BLUEPRINT_LIMITS.MAX_NAME_LENGTH,
     );
 
-    if (!isCloud) {
-      const convId = sanitizeId(`conv_${user.uid.slice(0, 14)}_${peerUid.slice(0, 14)}`);
-      const role = `Friend · ${cleanId}`.slice(0, BLUEPRINT_LIMITS.MAX_ROLE_LENGTH);
-      const nextContact: Contact = {
-        id: convId,
-        name: displayName,
-        handle,
-        role,
-        online: true,
-        isGroup: false,
-        memberCount: 2,
-        pinned: false,
-        unread: 0,
-        pinnedMsgId: undefined,
-        lastMessageText: "Connected via User ID",
-        lastMessageTime: nowTime(),
-        updatedAtMs: Date.now(),
-        participantIds: [user.uid, peerUid],
-        participantLumenIds: [user.lumenId, cleanId],
-        peerUserId: peerUid,
-        peerLumenId: cleanId,
-      };
-      saveLocalContacts(user.uid, [nextContact, ...contacts]);
-      setActiveId(convId);
-      return convId;
-    }
-
     const created = await createConversationBetweenUsers(user, {
       uid: peerUid,
       lumenId: cleanId,
@@ -1792,32 +1953,34 @@ function Messages() {
 
     const reqId = sanitizeId(`freq_${user.uid.slice(0, 20)}_${targetLumenId}_${Date.now().toString(36)}`);
 
-    if (!isCloud) {
-      const nextReq: FriendRequestItem = {
-        id: reqId,
-        fromUid: user.uid,
-        fromLumenId: user.lumenId,
-        fromName: user.name,
-        toUid: resolvedToUid,
-        toLumenId: targetLumenId,
-        toName: resolvedToName,
-        status: "pending",
-        createdAtMs: Date.now(),
-      };
-      saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
-      setSentRequestMap((prev) => ({
-        ...prev,
-        [targetLumenId]: true,
-        [target.lumenId]: true,
-        [resolvedToUid]: true,
-      }));
-      toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
-      return;
-    }
+    const nextReq: RealtimeFriendRequest = {
+      id: reqId,
+      fromUid: user.uid,
+      fromLumenId: user.lumenId,
+      fromName: user.name,
+      toUid: resolvedToUid,
+      toLumenId: targetLumenId,
+      toName: resolvedToName,
+      status: "pending",
+      createdAtMs: Date.now(),
+    };
 
-    const reqPath = `friendRequests/${reqId}`;
-    try {
-      await setDoc(doc(db, "friendRequests", reqId), {
+    // 1. Immediately save and broadcast via realtime-sync for instant delivery to recipient inbox
+    saveSharedFriendRequest(nextReq);
+
+    // 2. Save to local per-user state
+    saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
+    setSentRequestMap((prev) => ({
+      ...prev,
+      [targetLumenId]: true,
+      [target.lumenId]: true,
+      [resolvedToUid]: true,
+    }));
+    toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
+
+    // 3. Write to Firestore in background when cloud-authenticated
+    if (isCloud) {
+      void setDoc(doc(db, "friendRequests", reqId), {
         fromUid: user.uid,
         fromLumenId: user.lumenId,
         fromName: user.name.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH),
@@ -1827,16 +1990,9 @@ function Messages() {
         status: "pending",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+      }).catch((err) => {
+        console.warn("Firestore friend request write error:", err);
       });
-      setSentRequestMap((prev) => ({
-        ...prev,
-        [targetLumenId]: true,
-        [target.lumenId]: true,
-        [resolvedToUid]: true,
-      }));
-      toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
-    } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, reqPath);
     }
   };
 
@@ -2027,37 +2183,33 @@ function Messages() {
 
   const acceptFriendRequestAndStartConvo = async (req: FriendRequestItem) => {
     if (!user) return;
-    const isIncoming = req.toUid === user.uid && req.fromUid !== user.uid;
+    const isIncoming =
+      (req.toUid === user.uid || normalizeLumenId(req.toLumenId) === user.lumenId) &&
+      req.fromUid !== user.uid;
     const friendLumenId = isIncoming ? req.fromLumenId : req.toLumenId;
     const friendName = isIncoming ? req.fromName : req.toName;
     const friendUid = isIncoming ? req.fromUid : req.toUid;
 
-    if (!isCloud) {
-      const updatedReqs = friendRequests.map((r) =>
-        r.id === req.id ? { ...r, status: "accepted" as const } : r,
-      );
-      saveLocalFriendRequests(user.uid, updatedReqs);
-      setNewChatOpen(false);
-      await ensureConversationWithFriend(friendLumenId, friendName, friendUid);
-      toast.success(`Connected with ${friendName} (${friendLumenId})`);
-      return;
-    }
+    // 1. Immediately update status in shared realtime store
+    updateSharedFriendRequestStatus(req.id, "accepted");
 
-    if (req.status === "pending") {
-      const reqPath = `friendRequests/${req.id}`;
-      try {
-        await updateDoc(doc(db, "friendRequests", req.id), {
-          status: "accepted",
-          updatedAt: serverTimestamp(),
-        });
-      } catch (err) {
-        handleFirestoreError(err, OperationType.UPDATE, reqPath);
-      }
+    // 2. Update local state
+    const updatedReqs = friendRequests.map((r) =>
+      r.id === req.id ? { ...r, status: "accepted" as const } : r,
+    );
+    saveLocalFriendRequests(user.uid, updatedReqs);
+
+    // 3. Update in Firestore when cloud-authenticated
+    if (isCloud && req.status === "pending") {
+      void updateDoc(doc(db, "friendRequests", req.id), {
+        status: "accepted",
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
     }
 
     setNewChatOpen(false);
     await ensureConversationWithFriend(friendLumenId, friendName, friendUid);
-    toast.success(`Started conversation with ${friendName}`);
+    toast.success(`Connected with ${friendName} (${friendLumenId})`);
   };
 
   const removeFriendRequest = async (req: FriendRequestItem) => {

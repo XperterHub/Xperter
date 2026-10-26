@@ -42,6 +42,10 @@ service cloud.firestore {
         (
           'participantIds' in get(/databases/$(database)/documents/conversations/$(conversationId)).data &&
           request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
+        ) ||
+        (
+          'participantLumenIds' in get(/databases/$(database)/documents/conversations/$(conversationId)).data &&
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantLumenIds is list
         )
       );
     }
@@ -260,9 +264,19 @@ service cloud.firestore {
     match /friendRequests/{requestId} {
       allow get: if isVerified() &&
         isValidId(requestId) &&
-        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+        (
+          existing().fromUid == request.auth.uid ||
+          existing().toUid == request.auth.uid ||
+          existing().toLumenId is string ||
+          existing().fromLumenId is string
+        );
       allow list: if isVerified() &&
-        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+        (
+          existing().fromUid == request.auth.uid ||
+          existing().toUid == request.auth.uid ||
+          existing().toLumenId is string ||
+          existing().fromLumenId is string
+        );
       allow create: if isVerified() &&
         isValidId(requestId) &&
         isValidFriendRequest(incoming()) &&
@@ -282,11 +296,11 @@ service cloud.firestore {
         incoming().toName == existing().toName &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time &&
-        (existing().toUid == request.auth.uid || existing().fromUid == request.auth.uid) &&
+        (existing().toUid == request.auth.uid || existing().fromUid == request.auth.uid || existing().toLumenId is string) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
       allow delete: if isVerified() &&
         isValidId(requestId) &&
-        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid);
+        (existing().fromUid == request.auth.uid || existing().toUid == request.auth.uid || existing().toLumenId is string);
     }
 
     // Collection 4: /conversations/{conversationId}
@@ -295,12 +309,14 @@ service cloud.firestore {
         isValidId(conversationId) &&
         (
           existing().ownerId == request.auth.uid ||
-          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds) ||
+          ('participantLumenIds' in existing() && existing().participantLumenIds is list)
         );
       allow list: if isVerified() &&
         (
           existing().ownerId == request.auth.uid ||
-          ('participantIds' in existing() && request.auth.uid in existing().participantIds)
+          ('participantIds' in existing() && request.auth.uid in existing().participantIds) ||
+          ('participantLumenIds' in existing() && existing().participantLumenIds is list)
         );
       allow create: if isVerified() &&
         isValidId(conversationId) &&
