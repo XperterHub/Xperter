@@ -103,28 +103,48 @@ async function runConcurrent<T>(items: T[], limit: number, fn: (item: T, index: 
   await Promise.all(executing);
 }
 
-async function main() {
-  let configuredSite: string | undefined;
+async function ensureSiteExists(projectId: string, siteId: string, token: string): Promise<boolean> {
+  if (siteId === projectId) return true;
   try {
-    const fbJson = JSON.parse(fs.readFileSync(path.resolve('firebase.json'), 'utf8'));
-    configuredSite = fbJson.hosting?.site;
-  } catch {}
-  const siteId =
-    process.env.FIREBASE_HOSTING_SITE ||
-    configuredSite ||
-    sa.project_id ||
-    'gen-lang-client-0104750557';
-  const publicDir = path.resolve('.output/public');
-
-  if (!fs.existsSync(publicDir)) {
-    throw new Error(`Directory ${publicDir} does not exist`);
+    const checkRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/sites/${siteId}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (checkRes.ok) return true;
+    if (checkRes.status === 404) {
+      console.log(`Site '${siteId}' does not exist yet. Attempting automatic creation in project '${projectId}'...`);
+      const createRes = await fetch(
+        `https://firebasehosting.googleapis.com/v1beta1/projects/${projectId}/sites?siteId=${encodeURIComponent(siteId)}`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({})
+        }
+      );
+      if (createRes.ok) {
+        console.log(`Site '${siteId}' created successfully!`);
+        return true;
+      }
+      console.warn(`Note: Auto-creation returned (${createRes.status}). If the site is new, click 'Add another site' in Firebase Console.`);
+      return false;
+    }
+  } catch (err: any) {
+    console.warn(`Site check note:`, err?.message || err);
   }
+  return false;
+}
 
-  console.log('1. Authenticating with Firebase...');
-  const token = await getAccessToken(sa);
-
-  console.log('2. Creating new Hosting version...');
-  const verRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/sites/${siteId}/versions`, {
+async function deploySite(
+  targetSite: string,
+  token: string,
+  fileHashMap: Record<string, string>,
+  hashToBuffer: Record<string, Buffer>,
+): Promise<boolean> {
+  console.log(`\n--- Deploying to site: ${targetSite} ---`);
+  console.log(`1. Creating Hosting version for '${targetSite}'...`);
+  const verRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/sites/${targetSite}/versions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -144,26 +164,15 @@ async function main() {
       }
     })
   });
-  if (!verRes.ok) throw new Error(`Create version failed: ${await verRes.text()}`);
+  if (!verRes.ok) {
+    console.warn(`Create version failed for site '${targetSite}' (${verRes.status}): ${await verRes.text()}`);
+    return false;
+  }
   const version = await verRes.json();
   const versionName = version.name;
   console.log('   Version created:', versionName);
 
-  console.log('3. Scanning files and computing SHA256 hashes...');
-  const files = getAllFiles(publicDir);
-  const fileHashMap: Record<string, string> = {};
-  const hashToBuffer: Record<string, Buffer> = {};
-
-  for (const file of files) {
-    const content = fs.readFileSync(file.fullPath);
-    const gz = zlib.gzipSync(content);
-    const hash = crypto.createHash('sha256').update(gz).digest('hex');
-    fileHashMap[file.relativePath] = hash;
-    hashToBuffer[hash] = gz;
-  }
-  console.log(`   Found ${files.length} files to deploy.`);
-
-  console.log('4. Populating files to Firebase Hosting...');
+  console.log(`2. Populating files for '${targetSite}'...`);
   const popRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/${versionName}:populateFiles`, {
     method: 'POST',
     headers: {
@@ -172,14 +181,17 @@ async function main() {
     },
     body: JSON.stringify({ files: fileHashMap })
   });
-  if (!popRes.ok) throw new Error(`Populate files failed: ${await popRes.text()}`);
+  if (!popRes.ok) {
+    console.warn(`Populate files failed for '${targetSite}': ${await popRes.text()}`);
+    return false;
+  }
   const popData = await popRes.json();
   const uploadRequiredHashes: string[] = popData.uploadRequiredHashes || [];
   const uploadUrl = popData.uploadUrl;
   console.log(`   ${uploadRequiredHashes.length} files need uploading.`);
 
   if (uploadRequiredHashes.length > 0 && uploadUrl) {
-    console.log('5. Uploading files with concurrency...');
+    console.log('3. Uploading missing files...');
     let uploadedCount = 0;
     await runConcurrent(uploadRequiredHashes, 10, async (hash) => {
       const gz = hashToBuffer[hash];
@@ -197,10 +209,9 @@ async function main() {
         console.log(`   Uploaded ${uploadedCount}/${uploadRequiredHashes.length} files...`);
       }
     });
-    console.log('   All files uploaded successfully.');
   }
 
-  console.log('6. Finalizing version status...');
+  console.log(`4. Finalizing version for '${targetSite}'...`);
   const finRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/${versionName}?update_mask=status`, {
     method: 'PATCH',
     headers: {
@@ -209,10 +220,13 @@ async function main() {
     },
     body: JSON.stringify({ status: 'FINALIZED' })
   });
-  if (!finRes.ok) throw new Error(`Finalize failed: ${await finRes.text()}`);
+  if (!finRes.ok) {
+    console.warn(`Finalize failed for '${targetSite}': ${await finRes.text()}`);
+    return false;
+  }
 
-  console.log('7. Releasing version to live channel...');
-  const relRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/sites/${siteId}/releases?versionName=${versionName}`, {
+  console.log(`5. Releasing version for '${targetSite}'...`);
+  const relRes = await fetch(`https://firebasehosting.googleapis.com/v1beta1/sites/${targetSite}/releases?versionName=${versionName}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -220,12 +234,59 @@ async function main() {
     },
     body: JSON.stringify({})
   });
-  if (!relRes.ok) throw new Error(`Release failed: ${await relRes.text()}`);
+  if (!relRes.ok) {
+    console.warn(`Release failed for '${targetSite}': ${await relRes.text()}`);
+    return false;
+  }
   const release = await relRes.json();
-  console.log('   Release live:', release.name);
-  console.log('\n🎉 SUCCESS! Site successfully deployed to:');
-  console.log('   https://gen-lang-client-0104750557.web.app');
-  console.log('   https://gen-lang-client-0104750557.firebaseapp.com\n');
+  console.log(`   Release live for '${targetSite}':`, release.name);
+  console.log(`\n🎉 Site successfully deployed to:`);
+  console.log(`   https://${targetSite}.web.app`);
+  console.log(`   https://${targetSite}.firebaseapp.com\n`);
+  return true;
+}
+
+async function main() {
+  let configuredSite: string | undefined;
+  try {
+    const fbJson = JSON.parse(fs.readFileSync(path.resolve('firebase.json'), 'utf8'));
+    configuredSite = fbJson.hosting?.site;
+  } catch {}
+  const primarySiteId =
+    process.env.FIREBASE_HOSTING_SITE ||
+    configuredSite ||
+    'xperter-workspace';
+  const publicDir = path.resolve('.output/public');
+
+  if (!fs.existsSync(publicDir)) {
+    throw new Error(`Directory ${publicDir} does not exist`);
+  }
+
+  console.log('1. Authenticating with Firebase...');
+  const sa = getServiceAccount();
+  const token = await getAccessToken(sa);
+
+  console.log('2. Scanning files and computing SHA256 hashes...');
+  const files = getAllFiles(publicDir);
+  const fileHashMap: Record<string, string> = {};
+  const hashToBuffer: Record<string, Buffer> = {};
+
+  for (const file of files) {
+    const content = fs.readFileSync(file.fullPath);
+    const gz = zlib.gzipSync(content);
+    const hash = crypto.createHash('sha256').update(gz).digest('hex');
+    fileHashMap[file.relativePath] = hash;
+    hashToBuffer[hash] = gz;
+  }
+  console.log(`   Found ${files.length} files to deploy.`);
+
+  const targetSites = Array.from(new Set([primarySiteId, sa.project_id].filter(Boolean)));
+  for (const currentSite of targetSites) {
+    if (currentSite !== sa.project_id) {
+      await ensureSiteExists(sa.project_id, currentSite, token);
+    }
+    await deploySite(currentSite, token, fileHashMap, hashToBuffer);
+  }
 }
 
 main().catch((err) => {

@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "xperter-workspace",
     "public": ".output/public",
     "ignore": [
       "firebase.json",
