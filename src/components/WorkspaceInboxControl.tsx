@@ -44,7 +44,6 @@ import {
   CUSTOM_ANN_KEY,
   NOTIF_PREFS_KEY,
 } from "@/lib/notifications";
-import { formatVaultFolderName } from "@/lib/username-id";
 
 export function InboxAnimatedIcon({ open }: { open: boolean }) {
   return (
@@ -157,7 +156,10 @@ export function WorkspaceInboxControl({
         }
       }
       setReadAnnouncementIds(
-        readStringArray(READ_ANN_KEY, ["ann_voice_polls", "ann_security_vault"]),
+        readStringArray(
+          READ_ANN_KEY,
+          INITIAL_APP_ANNOUNCEMENTS.map((a) => a.id),
+        ),
       );
       setReadNotificationIds(readStringArray(READ_NOTIF_KEY, []));
     } catch {}
@@ -174,7 +176,7 @@ export function WorkspaceInboxControl({
 
     const convQuery = query(
       collection(db, "conversations"),
-      where("participantUids", "array-contains", user.uid),
+      where("participantIds", "array-contains", user.uid),
     );
 
     const unsubConv = onSnapshot(
@@ -188,10 +190,11 @@ export function WorkspaceInboxControl({
             Array.isArray(data.participantNames) && data.participantNames.length > 0
               ? data.participantNames.find((n: string) => n && n !== user.name) || "Chat"
               : "Chat";
+          const unreadCount = typeof data.unread === "number" ? data.unread : 0;
           items.push({
             id: d.id,
             name: String(data.name || otherName),
-            unread: 0,
+            unread: unreadCount,
             lastMessageText: String(data.lastMessageText || ""),
             lastMessageTime: String(data.lastMessageTime || ""),
             updatedAtMs: ts ? ts.toMillis() : Date.now(),
@@ -207,47 +210,7 @@ export function WorkspaceInboxControl({
     };
   }, [user]);
 
-  // Demo fallback conversations for offline preview
-  const demoConversations: ConvSummary[] = useMemo(() => {
-    return [
-      {
-        id: "demo_conv_aria",
-        name: "Aria Vance",
-        unread: 2,
-        lastMessageText: "Shared the updated design specs in the thread.",
-        lastMessageTime: "10:24 AM",
-        updatedAtMs: Date.now() - 1000 * 60 * 15,
-      },
-      {
-        id: "demo_conv_core",
-        name: "Xperter Core Studio",
-        unread: 0,
-        lastMessageText: "All unique User IDs are active for friend requests.",
-        lastMessageTime: "09:15 AM",
-        updatedAtMs: Date.now() - 1000 * 60 * 80,
-      },
-    ];
-  }, []);
-
-  const activeConversations = cloudConversations.length > 0 ? cloudConversations : demoConversations;
-
-  // Synthesize system and vault notifications
-  const systemInfoNotifications: AppNotification[] = useMemo(() => {
-    const list: AppNotification[] = [];
-    if (user) {
-      const folderName = formatVaultFolderName(user.lumenId || "user");
-      list.push({
-        id: `sys_vault_${user.uid}`,
-        kind: "system",
-        title: "Profile & Drive Vault Ready",
-        body: `Your cloud document vault is linked to folder "${folderName}". Keep your ID documents encrypted and synced.`,
-        time: "Active",
-        createdAtMs: Date.now() - 1000 * 60 * 60 * 3,
-        read: readNotificationIds.includes(`sys_vault_${user.uid}`),
-      });
-    }
-    return list;
-  }, [user, readNotificationIds]);
+  const activeConversations = cloudConversations;
 
   const synthesizedNotifications = useMemo(() => {
     return synthesizeWorkspaceNotifications({
@@ -257,7 +220,7 @@ export function WorkspaceInboxControl({
       announcements,
       readAnnouncementIds,
       readNotificationIds,
-      customNotifications: systemInfoNotifications,
+      customNotifications: [],
     });
   }, [
     user?.uid,
@@ -265,7 +228,6 @@ export function WorkspaceInboxControl({
     announcements,
     readAnnouncementIds,
     readNotificationIds,
-    systemInfoNotifications,
   ]);
 
   // Only display notifications from overall app, no friend request clutter

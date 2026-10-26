@@ -273,16 +273,13 @@ export function synthesizeWorkspaceNotifications(params: {
 
   for (const c of params.contacts) {
     const hasUnread = (c.unread ?? 0) > 0;
-    const hasRecentMsg = Boolean(c.lastMessageText && c.lastMessageText.trim().length > 0);
-    if (hasUnread || hasRecentMsg) {
+    if (hasUnread) {
       const notifId = `notif_conv_${c.id}_${c.updatedAtMs}`;
-      const isRead = !hasUnread || readNotifSet.has(notifId);
+      const isRead = readNotifSet.has(notifId);
       byId.set(notifId, {
         id: notifId,
         kind: "message",
-        title: hasUnread
-          ? `${c.name} (${c.unread} unread)`
-          : `Message in ${c.name}`,
+        title: `${c.name} (${c.unread} unread)`,
         body: c.lastMessageText || "Sent a message",
         time: c.lastMessageTime || "Recent",
         createdAtMs: c.updatedAtMs,

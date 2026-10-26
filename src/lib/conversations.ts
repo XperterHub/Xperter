@@ -101,7 +101,7 @@ export async function searchUsersInFirestore(
         if (!dirSnap.exists() && normalizedId !== normalizedId.toLowerCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toLowerCase()));
         }
-        if (!dirSnap.exists() && normalizedId.startsWith("LMN-")) {
+        if (!dirSnap.exists() && normalizedId !== normalizedId.toUpperCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toUpperCase()));
         }
         if (dirSnap.exists()) {

@@ -524,6 +524,9 @@ function Messages() {
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementCategory, setAnnouncementCategory] = useState<AnnouncementCategory>("update");
   const [announcementSummary, setAnnouncementSummary] = useState("");
+  const [directoryUsersCache, setDirectoryUsersCache] = useState<
+    Record<string, { displayName: string; handle: string }>
+  >({});
 
   useEffect(() => {
     if (authReady && !user) {
@@ -744,11 +747,48 @@ function Messages() {
       const participantLumenIds = Array.isArray(d.participantLumenIds)
         ? d.participantLumenIds.filter((item): item is string => typeof item === "string")
         : undefined;
+
+      const isDirect = !d.isGroup;
+      const isOwner = d.ownerId === user?.uid;
+      const peerLumenId = isDirect
+        ? (isOwner
+            ? (d.peerLumenId as string | undefined)
+            : participantLumenIds?.find((id) => id !== user?.lumenId) || (d.peerLumenId as string | undefined))
+        : undefined;
+      const peerUserId = isDirect
+        ? (isOwner
+            ? (d.peerUserId as string | undefined)
+            : participantIds?.find((id) => id !== user?.uid) || (d.ownerId as string | undefined))
+        : undefined;
+
+      let name = String(d.name ?? "Conversation");
+      let handle = String(d.handle ?? "@thread");
+      let role = String(d.role ?? "Direct Thread");
+
+      // For direct conversations, if the current user did not create the conversation,
+      // the stored name was the creator's peer name. We resolve the other party's identity!
+      if (isDirect && !isOwner && peerLumenId) {
+        const cached =
+          directoryUsersCache[peerLumenId] ||
+          directoryUsersCache[peerLumenId.toLowerCase()] ||
+          directoryUsersCache[peerLumenId.toUpperCase()];
+        if (cached) {
+          name = cached.displayName;
+          handle = cached.handle;
+        } else {
+          handle = `@${peerLumenId.toLowerCase().replace(/[^a-z0-9_-]+/g, ".")}`;
+          if (name === user?.name) {
+            name = `User ${peerLumenId}`;
+          }
+        }
+        role = `Friend · ${peerLumenId}`;
+      }
+
       return {
         id: docSnap.id,
-        name: String(d.name ?? "Conversation"),
-        handle: String(d.handle ?? "@thread"),
-        role: String(d.role ?? "Direct Thread"),
+        name,
+        handle,
+        role,
         online: true,
         isGroup: Boolean(d.isGroup),
         memberCount: typeof d.memberCount === "number" ? d.memberCount : 2,
@@ -760,8 +800,8 @@ function Messages() {
         updatedAtMs: toMillis(d.updatedAt),
         ...(participantIds ? { participantIds } : {}),
         ...(participantLumenIds ? { participantLumenIds } : {}),
-        ...(typeof d.peerUserId === "string" ? { peerUserId: d.peerUserId } : {}),
-        ...(typeof d.peerLumenId === "string" ? { peerLumenId: d.peerLumenId } : {}),
+        ...(peerUserId ? { peerUserId } : {}),
+        ...(peerLumenId ? { peerLumenId } : {}),
         ...(typeof d.typingUserId === "string" ? { typingUserId: d.typingUserId } : {}),
         ...(typeof d.typingUserName === "string" ? { typingUserName: d.typingUserName } : {}),
       };
@@ -822,7 +862,37 @@ function Messages() {
       unsubOwner();
       unsubParticipant();
     };
-  }, [authReady, user]);
+  }, [authReady, user, directoryUsersCache]);
+
+  // Dynamically resolve peer profile names from userDirectory for all active direct conversations
+  useEffect(() => {
+    if (!isCloud || !user) return;
+    contacts.forEach(async (c) => {
+      if (!c.isGroup && c.peerLumenId && !directoryUsersCache[c.peerLumenId]) {
+        try {
+          let snap = await getDoc(doc(db, "userDirectory", c.peerLumenId));
+          if (!snap.exists() && c.peerLumenId !== c.peerLumenId.toLowerCase()) {
+            snap = await getDoc(doc(db, "userDirectory", c.peerLumenId.toLowerCase()));
+          }
+          if (!snap.exists() && c.peerLumenId !== c.peerLumenId.toUpperCase()) {
+            snap = await getDoc(doc(db, "userDirectory", c.peerLumenId.toUpperCase()));
+          }
+          if (snap.exists()) {
+            const data = snap.data();
+            if (data.displayName) {
+              setDirectoryUsersCache((prev) => ({
+                ...prev,
+                [c.peerLumenId!]: {
+                  displayName: String(data.displayName),
+                  handle: String(data.handle || `@${c.peerLumenId!.toLowerCase()}`),
+                },
+              }));
+            }
+          }
+        } catch {}
+      }
+    });
+  }, [contacts, isCloud, user, directoryUsersCache]);
 
   // Subscribe in real time to Firestore typing indicators from peer users targeting current user
   useEffect(() => {
@@ -1737,7 +1807,7 @@ function Messages() {
         if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
         }
-        if (!dirSnap.exists() && targetLumenId.startsWith("LMN-")) {
+        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toUpperCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
         }
         if (dirSnap.exists()) {
@@ -1815,7 +1885,7 @@ function Messages() {
         if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
         }
-        if (!dirSnap.exists() && targetLumenId.startsWith("LMN-")) {
+        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toUpperCase()) {
           dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
         }
         if (dirSnap.exists()) {

@@ -295,6 +295,67 @@ async function main() {
     'xperter.github.io'
   ];
   await syncAuthorizedDomains(sa.project_id, token, domainsToAuthorize);
+  await deployFirestoreRules(sa.project_id, token);
+}
+
+async function deployFirestoreRules(projectId: string, token: string) {
+  const rulesPath = path.resolve('firestore.rules');
+  if (!fs.existsSync(rulesPath)) return;
+  const content = fs.readFileSync(rulesPath, 'utf8');
+  console.log('\nDeploying Firestore security rules...');
+
+  try {
+    const rulesetRes = await fetch(`https://firebaserules.googleapis.com/v1/projects/${projectId}/rulesets`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        source: {
+          files: [
+            {
+              name: 'firestore.rules',
+              content
+            }
+          ]
+        }
+      })
+    });
+
+    if (!rulesetRes.ok) {
+      console.warn(`Firestore ruleset creation note (${rulesetRes.status}): ${await rulesetRes.text()}`);
+      return;
+    }
+
+    const rulesetData = await rulesetRes.json();
+    const rulesetName = rulesetData.name;
+    console.log(`Created Firestore ruleset: ${rulesetName}`);
+
+    // Update release for cloud.firestore
+    const releaseRes = await fetch(
+      `https://firebaserules.googleapis.com/v1/projects/${projectId}/releases/cloud.firestore?updateMask=rulesetName`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: `projects/${projectId}/releases/cloud.firestore`,
+          rulesetName
+        })
+      }
+    );
+
+    if (releaseRes.ok) {
+      console.log('Successfully deployed and released Firestore security rules!');
+    } else {
+      console.warn(`Firestore release update note (${releaseRes.status}): ${await releaseRes.text()}`);
+    }
+  } catch (err: any) {
+    console.warn('Failed to deploy Firestore rules:', err?.message || err);
+  }
 }
 
 async function syncAuthorizedDomains(projectId: string, token: string, newDomains: string[]) {
