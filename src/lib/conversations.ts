@@ -110,9 +110,38 @@ export async function searchUsersInFirestore(
     }
   };
 
-  const isCloud = Boolean(currentUser?.isCloudUser || auth.currentUser);
+  // 0. Search the shared cross-tab/cross-window user directory for live matches
+  try {
+    const { getSharedDirectoryUsers } = await import("@/lib/realtime-sync");
+    const sharedUsers = getSharedDirectoryUsers();
+    for (const u of sharedUsers) {
+      const uLumen = normalizeLumenId(u.lumenId).toLowerCase();
+      const uHandle = u.handle.toLowerCase();
+      const uName = u.displayName.toLowerCase();
+      const matches =
+        uLumen === lower ||
+        uLumen === queryClean ||
+        uLumen.includes(lower) ||
+        uLumen.includes(queryClean) ||
+        uHandle.includes(lower) ||
+        uHandle.includes(queryClean) ||
+        uName.includes(lower) ||
+        uName.includes(queryClean);
 
-  // 0. Search the Google Account Dictionary for instant matches
+      if (matches) {
+        addCandidate({
+          uid: u.uid,
+          lumenId: u.lumenId,
+          displayName: u.displayName,
+          handle: u.handle,
+          photoURL: u.photoURL || "",
+          isDirectIdMatch: uLumen === lower || uLumen === queryClean,
+        });
+      }
+    }
+  } catch {}
+
+  // 1. Search the Google Account Dictionary for persistent account matches
   try {
     const dictList = listAllDictionaryAccounts();
     for (const entry of dictList) {
@@ -145,30 +174,44 @@ export async function searchUsersInFirestore(
     }
   } catch {}
 
-  if (isCloud) {
-    // 1. Direct lookup by unique User ID in userDirectory/{lumenId}
-    if (normalizedId.length >= 3) {
-      try {
-        let dirSnap = await getDoc(doc(db, "userDirectory", normalizedId));
-        if (!dirSnap.exists() && normalizedId !== normalizedId.toLowerCase()) {
-          dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toLowerCase()));
-        }
-        if (!dirSnap.exists() && normalizedId !== normalizedId.toUpperCase()) {
-          dirSnap = await getDoc(doc(db, "userDirectory", normalizedId.toUpperCase()));
-        }
+  // 2. Search locally claimed usernames
+  try {
+    const claimedMap = readClaimedUsernamesMap();
+    for (const [claimedId, ownerUid] of Object.entries(claimedMap)) {
+      const cId = claimedId.toLowerCase();
+      if (
+        cId === lower ||
+        cId === queryClean ||
+        cId.includes(lower) ||
+        cId.includes(queryClean)
+      ) {
+        addCandidate({
+          uid: ownerUid,
+          lumenId: claimedId,
+          displayName: `User ${claimedId}`,
+          handle: `@${cId}`,
+          isDirectIdMatch: cId === lower || cId === queryClean,
+        });
+      }
+    }
+  } catch {}
+
+  // 3. Direct lookup in Firestore userDirectory by ID variations
+  if (normalizedId.length >= 2) {
+    try {
+      const idKeys = Array.from(new Set([normalizedId, lower, queryClean, normalizedId.toUpperCase()]));
+      for (const idKey of idKeys) {
+        const dirSnap = await getDoc(doc(db, "userDirectory", idKey));
         if (dirSnap.exists()) {
           const d = dirSnap.data();
-          const lumenId = String(d.lumenId ?? normalizedId);
-          // Check if dictionary has the real auth UID for this user ID
+          const lumenId = String(d.lumenId ?? idKey);
           const dictMatch = listAllDictionaryAccounts().find(
             (a) => a.usernameId.toLowerCase() === lumenId.toLowerCase(),
           );
           const rawUid = String(d.uid ?? "");
-          const uid = sanitizeId(dictMatch?.uid || (rawUid && !rawUid.startsWith("usr_") ? rawUid : dictMatch?.uid || rawUid || `usr_${normalizedId}`));
+          const uid = sanitizeId(dictMatch?.uid || (rawUid && !rawUid.startsWith("usr_") ? rawUid : dictMatch?.uid || rawUid || `usr_${idKey}`));
           const displayName = String(d.displayName ?? dictMatch?.displayName ?? `User ${lumenId}`);
-          const handle = String(
-            d.handle ?? `@${displayName.toLowerCase().replace(/[^a-z0-9]+/g, ".")}`,
-          );
+          const handle = String(d.handle ?? `@${lumenId.toLowerCase()}`);
           addCandidate({
             uid,
             lumenId,
@@ -178,106 +221,91 @@ export async function searchUsersInFirestore(
             isDirectIdMatch: true,
           });
         }
-      } catch {
-        // Ignore directory lookup error
-      }
-    }
-
-    // 2. Query the Firestore `users` collection for searchable users by display name or user ID
-    try {
-      const usersQuery = query(
-        collection(db, "users"),
-        where("searchable", "==", true),
-        limit(40),
-      );
-      const usersSnap = await getDocs(usersQuery);
-      for (const docSnap of usersSnap.docs) {
-        const d = docSnap.data();
-        const uid = sanitizeId(String(d.uid ?? docSnap.id));
-        const lumenId = String(d.lumenId ?? uid);
-        const displayName = String(d.displayName ?? "User");
-        const displayNameLower = String(d.displayNameLower ?? displayName.toLowerCase());
-        const photoURL = typeof d.photoURL === "string" ? d.photoURL : "";
-        const handleBase = displayNameLower.replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "");
-        const handle = `@${handleBase || "user"}`.slice(0, BLUEPRINT_LIMITS.MAX_HANDLE_LENGTH);
-
-        const matchesName =
-          displayNameLower.includes(lower) ||
-          displayNameLower.includes(queryClean) ||
-          handle.toLowerCase().includes(lower) ||
-          handle.toLowerCase().includes(queryClean);
-        const matchesId =
-          lumenId.toLowerCase().includes(lower) ||
-          lumenId.toLowerCase().includes(queryClean) ||
-          lumenId.toLowerCase() === normalizedId.toLowerCase() ||
-          uid.toLowerCase().includes(lower);
-
-        if (matchesName || matchesId) {
-          addCandidate({
-            uid,
-            lumenId,
-            displayName,
-            handle,
-            photoURL,
-          });
-        }
       }
     } catch {
-      // Fallback to directory query if users query encounters an error
-    }
-
-    // 3. Also query `userDirectory` collection for additional public handles/IDs
-    try {
-      const dirListQuery = query(collection(db, "userDirectory"), limit(40));
-      const dirListSnap = await getDocs(dirListQuery);
-      for (const docSnap of dirListSnap.docs) {
-        const d = docSnap.data();
-        const uid = sanitizeId(String(d.uid ?? docSnap.id));
-        const lumenId = String(d.lumenId ?? docSnap.id);
-        const displayName = String(d.displayName ?? "User");
-        const handle = String(d.handle ?? `@${lumenId.toLowerCase()}`);
-        if (
-          displayName.toLowerCase().includes(lower) ||
-          displayName.toLowerCase().includes(queryClean) ||
-          lumenId.toLowerCase().includes(lower) ||
-          lumenId.toLowerCase().includes(queryClean) ||
-          lumenId.toLowerCase() === normalizedId.toLowerCase() ||
-          handle.toLowerCase().includes(lower) ||
-          handle.toLowerCase().includes(queryClean)
-        ) {
-          addCandidate({
-            uid,
-            lumenId,
-            displayName,
-            handle,
-          });
-        }
-      }
-    } catch {
-      // Ignore fallback error
-    }
-  } else {
-    // Local / offline fallback: search locally claimed usernames
-    try {
-      const claimedMap = readClaimedUsernamesMap();
-      for (const [claimedId, ownerUid] of Object.entries(claimedMap)) {
-        if (
-          claimedId.toLowerCase().includes(lower) ||
-          claimedId.toLowerCase().includes(queryClean) ||
-          claimedId.toLowerCase() === normalizedId.toLowerCase()
-        ) {
-          addCandidate({
-            uid: ownerUid,
-            lumenId: claimedId,
-            displayName: `User ${claimedId}`,
-            handle: `@${claimedId.toLowerCase()}`,
-          });
-        }
-      }
-    } catch {
-      // Ignore local storage error
+      // Ignore directory lookup error
     }
   }
+
+  // 4. Targeted queries on Firestore `users` collection by exact lumenId / displayName
+  try {
+    const candidateQueries = [
+      query(collection(db, "users"), where("lumenId", "==", normalizedId), limit(5)),
+      query(collection(db, "users"), where("lumenId", "==", lower), limit(5)),
+      query(collection(db, "users"), where("displayNameLower", "==", lower), limit(5)),
+      query(collection(db, "users"), where("searchable", "==", true), limit(50)),
+    ];
+
+    for (const q of candidateQueries) {
+      try {
+        const snap = await getDocs(q);
+        for (const docSnap of snap.docs) {
+          const d = docSnap.data();
+          const uid = sanitizeId(String(d.uid ?? docSnap.id));
+          const lumenId = String(d.lumenId ?? uid);
+          const displayName = String(d.displayName ?? "User");
+          const displayNameLower = String(d.displayNameLower ?? displayName.toLowerCase());
+          const photoURL = typeof d.photoURL === "string" ? d.photoURL : "";
+          const handleBase = displayNameLower.replace(/[^a-z0-9]+/g, ".").replace(/^\.+|\.+$/g, "");
+          const handle = `@${handleBase || "user"}`.slice(0, BLUEPRINT_LIMITS.MAX_HANDLE_LENGTH);
+
+          const matchesName =
+            displayNameLower.includes(lower) ||
+            displayNameLower.includes(queryClean) ||
+            handle.toLowerCase().includes(lower) ||
+            handle.toLowerCase().includes(queryClean);
+          const matchesId =
+            lumenId.toLowerCase().includes(lower) ||
+            lumenId.toLowerCase().includes(queryClean) ||
+            lumenId.toLowerCase() === lower ||
+            uid.toLowerCase().includes(lower);
+
+          if (matchesName || matchesId) {
+            addCandidate({
+              uid,
+              lumenId,
+              displayName,
+              handle,
+              photoURL,
+              isDirectIdMatch: lumenId.toLowerCase() === lower || lumenId.toLowerCase() === queryClean,
+            });
+          }
+        }
+      } catch {
+        // Query failed (e.g. index missing), continue to next query strategy
+      }
+    }
+  } catch {}
+
+  // 5. Query Firestore `userDirectory` collection for all public entries
+  try {
+    const dirListQuery = query(collection(db, "userDirectory"), limit(50));
+    const dirListSnap = await getDocs(dirListQuery);
+    for (const docSnap of dirListSnap.docs) {
+      const d = docSnap.data();
+      const uid = sanitizeId(String(d.uid ?? docSnap.id));
+      const lumenId = String(d.lumenId ?? docSnap.id);
+      const displayName = String(d.displayName ?? "User");
+      const handle = String(d.handle ?? `@${lumenId.toLowerCase()}`);
+      if (
+        displayName.toLowerCase().includes(lower) ||
+        displayName.toLowerCase().includes(queryClean) ||
+        lumenId.toLowerCase().includes(lower) ||
+        lumenId.toLowerCase().includes(queryClean) ||
+        lumenId.toLowerCase() === lower ||
+        handle.toLowerCase().includes(lower) ||
+        handle.toLowerCase().includes(queryClean)
+      ) {
+        addCandidate({
+          uid,
+          lumenId,
+          displayName,
+          handle,
+          isDirectIdMatch: lumenId.toLowerCase() === lower || lumenId.toLowerCase() === queryClean,
+        });
+      }
+    }
+  } catch {}
 
   return Array.from(resultsById.values());
 }

@@ -2056,7 +2056,7 @@ function Messages() {
     if (e) e.preventDefault();
     if (!user) return;
     const targetLumenId = normalizeLumenId(friendTargetId);
-    if (targetLumenId.length < 4) {
+    if (targetLumenId.length < 3) {
       toast.error("Enter a valid User ID");
       return;
     }
@@ -2071,56 +2071,75 @@ function Messages() {
       BLUEPRINT_LIMITS.MAX_NAME_LENGTH,
     );
 
-    if (isCloud) {
-      try {
-        let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
-        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
-          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
-        }
-        if (!dirSnap.exists() && targetLumenId !== targetLumenId.toUpperCase()) {
-          dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
-        }
-        if (dirSnap.exists()) {
-          const dirData = dirSnap.data();
-          if (typeof dirData.uid === "string" && dirData.uid) {
-            resolvedToUid = sanitizeId(dirData.uid);
-          }
-          if (typeof dirData.displayName === "string" && dirData.displayName) {
-            resolvedToName = dirData.displayName.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
-          }
-        } else {
-          toast.error(`User ID "@${targetLumenId}" does not exist.`);
-          return;
-        }
-      } catch (err) {
-        console.error("Directory lookup failed:", err);
+    // 1. Resolve from shared real-time directory
+    try {
+      const { getSharedDirectoryUsers } = await import("@/lib/realtime-sync");
+      const match = getSharedDirectoryUsers().find(
+        (u) => normalizeLumenId(u.lumenId).toLowerCase() === targetLumenId.toLowerCase(),
+      );
+      if (match) {
+        if (match.uid) resolvedToUid = sanitizeId(match.uid);
+        if (match.displayName) resolvedToName = match.displayName.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
       }
-    }
+    } catch {}
+
+    // 2. Resolve from Google Account Dictionary
+    try {
+      const dictMatch = listAllDictionaryAccounts().find(
+        (a) => a.usernameId.toLowerCase() === targetLumenId.toLowerCase(),
+      );
+      if (dictMatch) {
+        if (dictMatch.uid) resolvedToUid = sanitizeId(dictMatch.uid);
+        if (dictMatch.displayName) resolvedToName = dictMatch.displayName.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
+      }
+    } catch {}
+
+    // 3. Resolve from Firestore userDirectory
+    try {
+      let dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId));
+      if (!dirSnap.exists() && targetLumenId !== targetLumenId.toLowerCase()) {
+        dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toLowerCase()));
+      }
+      if (!dirSnap.exists() && targetLumenId !== targetLumenId.toUpperCase()) {
+        dirSnap = await getDoc(doc(db, "userDirectory", targetLumenId.toUpperCase()));
+      }
+      if (dirSnap.exists()) {
+        const dirData = dirSnap.data();
+        if (typeof dirData.uid === "string" && dirData.uid) {
+          resolvedToUid = sanitizeId(dirData.uid);
+        }
+        if (typeof dirData.displayName === "string" && dirData.displayName) {
+          resolvedToName = dirData.displayName.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH);
+        }
+      }
+    } catch {}
 
     const reqId = sanitizeId(`freq_${user.uid.slice(0, 20)}_${targetLumenId}_${Date.now().toString(36)}`);
-    setFriendTargetId("");
-    setFriendTargetName("");
-    handleNewChatOpenChange(false);
+    setSentRequestMap((prev) => ({
+      ...prev,
+      [targetLumenId]: true,
+      [targetLumenId.toLowerCase()]: true,
+      [resolvedToUid]: true,
+    }));
 
-    if (!isCloud) {
-      const nextReq: FriendRequestItem = {
-        id: reqId,
-        fromUid: user.uid,
-        fromLumenId: user.lumenId,
-        fromName: user.name,
-        toUid: resolvedToUid,
-        toLumenId: targetLumenId,
-        toName: resolvedToName,
-        status: "pending",
-        createdAtMs: Date.now(),
-      };
-      saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
-      await ensureConversationWithFriend(targetLumenId, resolvedToName, resolvedToUid);
-      toast.success(`Added friend ${resolvedToName} (@${targetLumenId})`);
-      return;
-    }
+    const nextReq: FriendRequestItem = {
+      id: reqId,
+      fromUid: user.uid,
+      fromLumenId: user.lumenId,
+      fromName: user.name,
+      toUid: resolvedToUid,
+      toLumenId: targetLumenId,
+      toName: resolvedToName,
+      status: "pending",
+      createdAtMs: Date.now(),
+    };
 
-    const reqPath = `friendRequests/${reqId}`;
+    // Save and broadcast via realtime-sync for instant delivery across tabs/windows
+    saveSharedFriendRequest(nextReq);
+
+    saveLocalFriendRequests(user.uid, [nextReq, ...friendRequests]);
+
+    // Also persist to Firestore friendRequests collection
     try {
       await setDoc(doc(db, "friendRequests", reqId), {
         fromUid: user.uid,
@@ -2133,11 +2152,13 @@ function Messages() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      await ensureConversationWithFriend(targetLumenId, resolvedToName, resolvedToUid);
-      toast.success(`Sent friend request to ${resolvedToName} (@${targetLumenId})`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, reqPath);
+      console.warn("Firestore friend request write error:", err);
     }
+
+    triggerSettingsHaptic(true);
+    playSettingsLiquidSound(true);
+    toast.success(`Sent friend request to ${resolvedToName} (@${targetLumenId})`);
   };
 
   const handleDirectStartByUserId = async () => {
@@ -3045,13 +3066,32 @@ function Messages() {
                     {/* Direct Request Card if typed ID has no matches */}
                     {friendTargetId.trim().length >= 3 && !isSearchingLive && liveUserResults.length === 0 && (
                       <div className="rounded-2xl border border-glass-edge bg-glass/25 p-5 text-center">
-                        <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-destructive/15 text-destructive mb-2.5">
-                          <XCircle className="h-5 w-5" />
+                        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 mb-2.5">
+                          <UserPlus className="h-5 w-5" />
                         </div>
-                        <p className="text-sm font-medium text-foreground">No user found with ID "{friendTargetId.trim()}"</p>
-                        <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
-                          The User ID must match an existing registered account to appear in search and receive friend requests.
+                        <p className="text-sm font-semibold text-foreground">
+                          Direct Friend Request to "@{friendTargetId.trim()}"
                         </p>
+                        <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
+                          Send a direct friend request to this User ID. They will receive it in their Workspace Inbox.
+                        </p>
+                        <div className="mt-4">
+                          {sentRequestMap[normalizeLumenId(friendTargetId.trim())] || sentRequestMap[friendTargetId.trim().toLowerCase()] ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-4 py-2 text-xs font-medium text-emerald-400">
+                              <Check className="h-3.5 w-3.5" />
+                              Requested
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleSendFriendRequest()}
+                              className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-5 py-2 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
+                            >
+                              <UserPlus className="h-3.5 w-3.5" />
+                              <span>Send Friend Request</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
 

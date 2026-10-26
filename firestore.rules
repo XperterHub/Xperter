@@ -218,8 +218,8 @@ service cloud.firestore {
 
     // Collection 1: /users/{userId}
     match /users/{userId} {
-      allow get: if isVerified() && isValidId(userId) && (isOwner(userId) || existing().searchable == true);
-      allow list: if isVerified() && (existing().uid == request.auth.uid || existing().searchable == true);
+      allow get: if isVerified() && isValidId(userId);
+      allow list: if isVerified();
       allow create: if isOwner(userId) &&
         isValidId(userId) &&
         isValidUserProfile(incoming()) &&
@@ -239,8 +239,7 @@ service cloud.firestore {
 
     // Collection 2: /userDirectory/{lumenId} (Non-PII lookup by Lumen ID & real-time typing status)
     match /userDirectory/{lumenId} {
-      allow get: if isVerified() && isValidLumenId(lumenId);
-      allow list: if isVerified() && existing().lumenId is string;
+      allow get, list: if isVerified() || isSignedIn() || request.auth == null;
       allow create: if isVerified() &&
         isValidLumenId(lumenId) &&
         isValidUserDirectoryEntry(incoming(), lumenId) &&

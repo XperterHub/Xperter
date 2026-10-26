@@ -33,15 +33,27 @@ export interface RealtimeConversation {
   updatedAtMs: number;
 }
 
+export interface RealtimeDirectoryUser {
+  uid: string;
+  lumenId: string;
+  displayName: string;
+  handle: string;
+  photoURL?: string;
+  email?: string;
+  updatedAtMs: number;
+}
+
 export type RealtimeEvent =
   | { type: "FRIEND_REQUEST_SENT"; request: RealtimeFriendRequest }
   | { type: "FRIEND_REQUEST_UPDATED"; requestId: string; status: "accepted" | "declined" }
   | { type: "CONVERSATION_UPSERTED"; conversation: RealtimeConversation }
-  | { type: "MESSAGE_SENT"; convId: string; message: any };
+  | { type: "MESSAGE_SENT"; convId: string; message: any }
+  | { type: "USER_DIRECTORY_UPDATED"; user: RealtimeDirectoryUser };
 
 export const SHARED_FRIEND_REQUESTS_KEY = "xperter.shared_friend_requests.v2";
 export const SHARED_CONVERSATIONS_KEY = "xperter.shared_conversations.v2";
 export const SHARED_MESSAGES_KEY_PREFIX = "xperter.messages.shared.";
+export const SHARED_USER_DIRECTORY_KEY = "xperter.shared_user_directory.v2";
 
 let broadcastChannel: BroadcastChannel | null = null;
 const eventListeners = new Set<(event: RealtimeEvent) => void>();
@@ -324,3 +336,49 @@ export function saveSharedMessage(convId: string, message: any): void {
 
   broadcastRealtimeEvent({ type: "MESSAGE_SENT", convId, message });
 }
+
+export function readAllSharedDirectoryUsers(): RealtimeDirectoryUser[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(SHARED_USER_DIRECTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveSharedDirectoryUser(
+  user: Omit<RealtimeDirectoryUser, "updatedAtMs">,
+): void {
+  if (typeof window === "undefined" || !user || !user.lumenId) return;
+  const existing = readAllSharedDirectoryUsers();
+  const normLumen = normalizeLumenId(user.lumenId).toLowerCase();
+  const cleanUid = user.uid ? sanitizeId(user.uid) : "";
+  const fullUser: RealtimeDirectoryUser = {
+    ...user,
+    uid: cleanUid,
+    lumenId: user.lumenId,
+    handle: user.handle.startsWith("@") ? user.handle : `@${user.lumenId.toLowerCase()}`,
+    updatedAtMs: Date.now(),
+  };
+
+  const filtered = existing.filter((u) => {
+    const matchLumen = normalizeLumenId(u.lumenId).toLowerCase() === normLumen;
+    const matchUid = cleanUid && u.uid && u.uid === cleanUid;
+    return !matchLumen && !matchUid;
+  });
+
+  const next = [...filtered, fullUser];
+  try {
+    window.localStorage.setItem(SHARED_USER_DIRECTORY_KEY, JSON.stringify(next));
+  } catch {}
+
+  broadcastRealtimeEvent({ type: "USER_DIRECTORY_UPDATED", user: fullUser });
+}
+
+export function getSharedDirectoryUsers(): RealtimeDirectoryUser[] {
+  return readAllSharedDirectoryUsers();
+}
+

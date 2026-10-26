@@ -214,6 +214,18 @@ export function saveAccountToDictionary(entry: AccountDictionaryEntry): void {
     dict[`id:${normalizedId.toLowerCase()}`] = fullEntry;
 
     getLocalStorage().setItem(ACCOUNT_DICTIONARY_KEY, JSON.stringify(dict));
+
+    // Also sync to shared cross-client user directory
+    import("@/lib/realtime-sync").then(({ saveSharedDirectoryUser }) => {
+      saveSharedDirectoryUser({
+        uid: cleanUid,
+        lumenId: normalizedId,
+        displayName: entry.displayName || `User ${normalizedId}`,
+        handle: `@${normalizedId.toLowerCase()}`,
+        photoURL: entry.photoURL || "",
+        email: cleanEmail,
+      });
+    }).catch(() => {});
   } catch {
     // Ignore storage quota errors
   }
@@ -461,7 +473,7 @@ function readLocalUser(): AppUser | null {
       email,
       photoURL,
       about,
-      isCloudUser: false,
+      isCloudUser: Boolean(parsed.isCloudUser ?? (auth.currentUser != null)),
     };
   } catch {
     return null;
@@ -513,11 +525,12 @@ export function toAppUser(u: FirebaseUser): AppUser {
   const dictEntry = lookupAccountInDictionary(cleanEmail, uid);
 
   let lumenId = "";
-  if (dictEntry && dictEntry.usernameId) {
-    // REUSE the stored username ID from the dictionary!
-    lumenId = dictEntry.usernameId;
-  } else if (override.lumenId) {
+  if (override.lumenId && sanitizeUsernameId(override.lumenId).length >= 4) {
+    // User's custom or confirmed username ID takes top precedence
     lumenId = sanitizeUsernameId(override.lumenId);
+  } else if (dictEntry && dictEntry.usernameId && sanitizeUsernameId(dictEntry.usernameId).length >= 4) {
+    // REUSE the stored username ID from the dictionary!
+    lumenId = sanitizeUsernameId(dictEntry.usernameId);
   } else {
     // Generate a randomized username ID and immediately store it in the dictionary
     lumenId = generateRandomizedUsernameId(uid);
@@ -611,7 +624,13 @@ export async function syncUserProfileToFirestore(
       }
     } else {
       const existingData = snap.data();
-      const confirmedId = typeof existingData.lumenId === "string" ? existingData.lumenId : appUser.lumenId;
+      const override = readProfileOverride(appUser.uid);
+      const confirmedId =
+        override.lumenId && sanitizeUsernameId(override.lumenId).length >= 4
+          ? sanitizeUsernameId(override.lumenId)
+          : typeof existingData.lumenId === "string" && existingData.lumenId.length >= 4
+            ? existingData.lumenId
+            : appUser.lumenId;
       markUsernameConfirmed(appUser.uid, confirmedId);
       appUser.usernameConfirmed = true;
       appUser.lumenId = confirmedId;
@@ -627,7 +646,6 @@ export async function syncUserProfileToFirestore(
       });
 
       // If cloud has a custom lumenId and local override wasn't set yet, adopt cloud's lumenId
-      const override = readProfileOverride(appUser.uid);
       if (
         !override.lumenId &&
         typeof existingData.lumenId === "string" &&
