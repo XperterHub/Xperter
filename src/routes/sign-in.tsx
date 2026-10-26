@@ -8,6 +8,8 @@ import {
   checkUsernameAvailability,
   getRememberedEmail,
   getRememberMePreference,
+  isUsernameConfirmed,
+  markUsernameConfirmed,
   signInWithEmailPassword,
   signInWithGoogle,
   updateUserProfile,
@@ -66,13 +68,7 @@ function SignIn() {
   useEffect(() => {
     if (!authReady || !user) return;
 
-    const hasCustomUsername = Boolean(user.lumenId && !user.lumenId.startsWith("LMN-"));
-    const isConfirmed =
-      hasCustomUsername ||
-      (typeof window !== "undefined" &&
-        window.localStorage.getItem(`lumen.username.confirmed.${user.uid}`) === "true");
-
-    if (!isConfirmed) {
+    if (!isUsernameConfirmed(user)) {
       setPendingGoogleUser(user);
       setGoogleUsername(
         (prev) =>
@@ -115,12 +111,8 @@ function SignIn() {
     try {
       const authedUser = await signInWithGoogle(remember);
       const defaultId = authedUser.email?.split("@")[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") || "user";
-      const hasCustomId =
-        Boolean(authedUser.lumenId && !authedUser.lumenId.startsWith("LMN-")) ||
-        (typeof window !== "undefined" &&
-          window.localStorage.getItem(`lumen.username.confirmed.${authedUser.uid}`) === "true");
 
-      if (hasCustomId) {
+      if (isUsernameConfirmed(authedUser)) {
         toast.success("Signed in with Google");
         nav({ to: "/app/messages" });
       } else {
@@ -172,9 +164,7 @@ function SignIn() {
     } catch (err: any) {
       console.warn("Could not sync username to cloud, continuing locally:", err);
     } finally {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(`lumen.username.confirmed.${pendingGoogleUser.uid}`, "true");
-      }
+      markUsernameConfirmed(pendingGoogleUser.uid, check.normalized);
       toast.success(`Welcome to Xperter, @${check.normalized}!`);
       setPendingGoogleUser(null);
       setSavingGoogleUsername(false);
@@ -235,9 +225,7 @@ function SignIn() {
         open={Boolean(pendingGoogleUser)}
         onOpenChange={(open) => {
           if (!open && !savingGoogleUsername && pendingGoogleUser) {
-            if (typeof window !== "undefined") {
-              window.localStorage.setItem(`lumen.username.confirmed.${pendingGoogleUser.uid}`, "true");
-            }
+            markUsernameConfirmed(pendingGoogleUser.uid);
             setPendingGoogleUser(null);
             nav({ to: "/app/messages" });
           }

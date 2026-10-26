@@ -50,6 +50,7 @@ export type AppUser = {
   photoURL: string;
   about?: string;
   isCloudUser?: boolean;
+  usernameConfirmed?: boolean;
 };
 
 const LOCAL_AUTH_KEY = "lumen.auth.user";
@@ -169,22 +170,28 @@ function saveClaimedUsername(username: string, ownerUid: string) {
   }
 }
 
-function readProfileOverride(
-  uid: string,
-): Partial<Pick<AppUser, "name" | "lumenId" | "photoURL" | "about">> {
+export interface ProfileOverrideData {
+  name?: string;
+  lumenId?: string;
+  photoURL?: string;
+  about?: string;
+  usernameConfirmed?: boolean;
+}
+
+export function readProfileOverride(uid: string): ProfileOverrideData {
   try {
     const raw = getLocalStorage().getItem(`${PROFILE_OVERRIDE_PREFIX}${uid}`);
     if (!raw) return {};
-    const parsed = JSON.parse(raw) as Partial<Pick<AppUser, "name" | "lumenId" | "photoURL" | "about">>;
+    const parsed = JSON.parse(raw) as ProfileOverrideData;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
 }
 
-function writeProfileOverride(
+export function writeProfileOverride(
   uid: string,
-  override: Partial<Pick<AppUser, "name" | "lumenId" | "photoURL" | "about">>,
+  override: ProfileOverrideData,
 ) {
   try {
     const current = readProfileOverride(uid);
@@ -192,6 +199,39 @@ function writeProfileOverride(
     getLocalStorage().setItem(`${PROFILE_OVERRIDE_PREFIX}${uid}`, JSON.stringify(merged));
   } catch {
     // Ignore storage errors
+  }
+}
+
+export function isUsernameConfirmed(user: AppUser | null | undefined): boolean {
+  if (!user || !user.uid) return false;
+  if (user.usernameConfirmed) return true;
+  const override = readProfileOverride(user.uid);
+  if (override.usernameConfirmed) return true;
+  if (override.lumenId) return true;
+  if (typeof window !== "undefined") {
+    try {
+      if (
+        window.localStorage.getItem(`xperter.username.confirmed.${user.uid}`) === "true" ||
+        window.localStorage.getItem(`lumen.username.confirmed.${user.uid}`) === "true"
+      ) {
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
+export function markUsernameConfirmed(uid: string, chosenId?: string): void {
+  const cleanUid = sanitizeId(uid);
+  writeProfileOverride(cleanUid, {
+    usernameConfirmed: true,
+    ...(chosenId ? { lumenId: sanitizeUsernameId(chosenId) } : {}),
+  });
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(`xperter.username.confirmed.${cleanUid}`, "true");
+      window.localStorage.setItem(`lumen.username.confirmed.${cleanUid}`, "true");
+    } catch {}
   }
 }
 
@@ -379,6 +419,12 @@ function toAppUser(u: FirebaseUser): AppUser {
     override.photoURL !== undefined ? override.photoURL : u.photoURL || "";
   const photoURL = rawPhoto.slice(0, BLUEPRINT_LIMITS.MAX_PHOTO_URL_LENGTH);
   const lumenId = sanitizeUsernameId(override.lumenId || deriveLumenId(uid)) || deriveLumenId(uid);
+  const isConfirmed =
+    override.usernameConfirmed === true ||
+    Boolean(override.lumenId) ||
+    (typeof window !== "undefined" &&
+      (window.localStorage.getItem(`xperter.username.confirmed.${uid}`) === "true" ||
+       window.localStorage.getItem(`lumen.username.confirmed.${uid}`) === "true"));
 
   return {
     uid,
@@ -387,6 +433,7 @@ function toAppUser(u: FirebaseUser): AppUser {
     email,
     photoURL,
     isCloudUser: true,
+    usernameConfirmed: isConfirmed,
   };
 }
 
@@ -446,6 +493,11 @@ export async function syncUserProfileToFirestore(
       }
     } else {
       const existingData = snap.data();
+      const confirmedId = typeof existingData.lumenId === "string" ? existingData.lumenId : appUser.lumenId;
+      markUsernameConfirmed(appUser.uid, confirmedId);
+      appUser.usernameConfirmed = true;
+      appUser.lumenId = confirmedId;
+
       // If cloud has a custom lumenId and local override wasn't set yet, adopt cloud's lumenId
       const override = readProfileOverride(appUser.uid);
       if (
@@ -758,11 +810,13 @@ export async function updateUserProfile(updates: {
   const nextAbout =
     updates.about !== undefined ? updates.about.trim().slice(0, 500) : current.about;
 
+  markUsernameConfirmed(current.uid, nextLumenId);
   writeProfileOverride(current.uid, {
     name: nextName,
     lumenId: nextLumenId,
     photoURL: nextPhotoURL,
     about: nextAbout,
+    usernameConfirmed: true,
   });
   saveClaimedUsername(nextLumenId, current.uid);
 
