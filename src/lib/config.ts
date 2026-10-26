@@ -1,4 +1,4 @@
-export const APP_NAME = "Lumen";
+export const APP_NAME = "Xperter";
 
 export type GlyphKind = "hero" | "messages" | "rings" | "cross" | "knot" | "square" | "segments" | "brand";
 

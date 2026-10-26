@@ -84,7 +84,7 @@ export function XperterLogoSvg({ size = 44, className = "" }: { size?: number; c
   );
 }
 
-export function BrandIcon({ size = 56, src }: { size?: number; src?: string }) {
+export function BrandIcon({ size = 56, src = "/xperter-logo-120x120.png" }: { size?: number; src?: string }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const iconRef = useRef<HTMLDivElement>(null);
   const iconSize = Math.round(size * 0.78);
@@ -151,9 +151,8 @@ export function BrandIcon({ size = 56, src }: { size?: number; src?: string }) {
             draggable={false}
             width={iconSize}
             height={iconSize}
-            className="object-contain"
+            className="object-cover rounded-full"
             onError={(e) => {
-              // Hide broken image icon if custom src fails
               (e.currentTarget as HTMLImageElement).style.display = "none";
             }}
           />

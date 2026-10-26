@@ -549,7 +549,7 @@ export function AnnouncementsInboxView({
               </span>
             </div>
             <p className="truncate text-xs text-muted-foreground">
-              Official Lumen releases, workspace updates &amp; security notices
+              Official Xperter releases, workspace updates &amp; security notices
             </p>
           </div>
         </div>

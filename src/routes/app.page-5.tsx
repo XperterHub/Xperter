@@ -4,10 +4,10 @@ import { ComingSoon } from "@/components/ComingSoon";
 export const Route = createFileRoute("/app/page-5")({
   head: () => ({
     meta: [
-      { title: "Facet — Coming soon · Lumen" },
-      { name: "description", content: "The Facet space in Lumen is coming soon." },
-      { property: "og:title", content: "Facet — Coming soon · Lumen" },
-      { property: "og:description", content: "The Facet space in Lumen is coming soon." },
+      { title: "Facet — Coming soon · Xperter" },
+      { name: "description", content: "The Facet space in Xperter is coming soon." },
+      { property: "og:title", content: "Facet — Coming soon · Xperter" },
+      { property: "og:description", content: "The Facet space in Xperter is coming soon." },
     ],
   }),
   component: Page,

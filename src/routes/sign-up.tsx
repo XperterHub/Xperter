@@ -15,10 +15,10 @@ import { sanitizeId } from "@/lib/firebase";
 export const Route = createFileRoute("/sign-up")({
   head: () => ({
     meta: [
-      { title: "Create account — Lumen" },
-      { name: "description", content: "Create your Lumen account and claim your unique User ID." },
-      { property: "og:title", content: "Create account — Lumen" },
-      { property: "og:description", content: "Create your Lumen account and claim your unique User ID." },
+      { title: "Create account — Xperter" },
+      { name: "description", content: "Create your Xperter account and claim your unique User ID." },
+      { property: "og:title", content: "Create account — Xperter" },
+      { property: "og:description", content: "Create your Xperter account and claim your unique User ID." },
     ],
   }),
   component: SignUp,

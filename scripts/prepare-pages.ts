@@ -28,6 +28,8 @@ async function main() {
     { route: "/forgot-password", targets: ["forgot-password.html", "forgot-password/index.html"] },
     { route: "/app/page-2", targets: ["app/page-2/index.html"] },
     { route: "/app/messages", targets: ["app/messages/index.html"] },
+    { route: "/privacy", targets: ["privacy.html", "privacy/index.html"] },
+    { route: "/terms", targets: ["terms.html", "terms/index.html"] },
   ];
 
   for (const item of routes) {

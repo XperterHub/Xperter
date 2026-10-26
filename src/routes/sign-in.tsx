@@ -26,10 +26,10 @@ import {
 export const Route = createFileRoute("/sign-in")({
   head: () => ({
     meta: [
-      { title: "Sign in — Lumen" },
-      { name: "description", content: "Sign in to your Lumen account." },
-      { property: "og:title", content: "Sign in — Lumen" },
-      { property: "og:description", content: "Sign in to your Lumen account." },
+      { title: "Sign in — Xperter" },
+      { name: "description", content: "Sign in to your Xperter account." },
+      { property: "og:title", content: "Sign in — Xperter" },
+      { property: "og:description", content: "Sign in to your Xperter account." },
     ],
   }),
   component: SignIn,
@@ -170,7 +170,7 @@ function SignIn() {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(`lumen.username.confirmed.${pendingGoogleUser.uid}`, "true");
       }
-      toast.success(`Welcome to Lumen, @${check.normalized}!`);
+      toast.success(`Welcome to Xperter, @${check.normalized}!`);
       setPendingGoogleUser(null);
       nav({ to: "/" });
     } catch (err: any) {

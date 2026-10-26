@@ -350,7 +350,7 @@ export function WorkspaceInboxControl({
       },
       {
         id: "core_team",
-        name: "Lumen Core Studio",
+        name: "Xperter Core Studio",
         unread: 0,
         lastMessageText: "All unique User IDs are active for friend requests.",
         lastMessageTime: "09:15 AM",
@@ -491,7 +491,7 @@ export function WorkspaceInboxControl({
       id: reqId,
       fromUid: user?.uid || "usr_me",
       fromLumenId: user?.lumenId || "lumen_user",
-      fromName: user?.name || "Lumen User",
+      fromName: user?.name || "Xperter User",
       toUid: resolvedToUid,
       toLumenId: targetLumenId,
       toName: resolvedToName,

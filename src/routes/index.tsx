@@ -10,13 +10,13 @@ import { useAuthState } from "@/lib/auth";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Lumen — Conversations, cast in chrome" },
+      { title: "Xperter — Conversations, cast in chrome" },
       {
         name: "description",
         content:
           "An immersive chrome-and-glass workspace for instant threads, live polls, voice rooms, and encrypted notes.",
       },
-      { property: "og:title", content: "Lumen — Conversations, cast in chrome" },
+      { property: "og:title", content: "Xperter — Conversations, cast in chrome" },
       {
         property: "og:description",
         content:

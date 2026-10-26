@@ -1,6 +1,6 @@
 # Task Management & Auto-Planner Engine — Implementation & Architecture Guide
 
-A complete, high-performance, offline-first personal task and habit management system built for **Lumen**, featuring an integrated lightweight AI natural language processing (NLP) planner, Web Audio API alarm synthesizer, and liquid glassmorphism interface.
+A complete, high-performance, offline-first personal task and habit management system built for **Xperter**, featuring an integrated lightweight AI natural language processing (NLP) planner, Web Audio API alarm synthesizer, and liquid glassmorphism interface.
 
 ---
 
@@ -19,7 +19,7 @@ task-page/
 1. **0 MB Added Model Weight**: Operates 100% locally and offline without external API keys or multi-megabyte neural network weights.
 2. **Imperative Tense & Grammar Correction**: Automatically transforms conversational and typo-riddled input (e.g. `"atten the meeting at 6pn"`) into clean, professional task titles (`"Meeting"` at `6:00 PM`).
 3. **Habit vs. One-Off Task Differentiation**: Understands recurring schedules (`"daily except saturday and sunday"` $\to$ Mon–Fri Habit) versus one-off deadlines (`"attend meeting today"` $\to$ High-priority Task).
-4. **Liquid Glassmorphism Aesthetics**: Built to seamlessly match the Lumen design system with frosted glass panels, liquid press micro-animations, and collision-aware popovers.
+4. **Liquid Glassmorphism Aesthetics**: Built to seamlessly match the Xperter design system with frosted glass panels, liquid press micro-animations, and collision-aware popovers.
 
 ---
 

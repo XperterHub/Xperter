@@ -8,10 +8,10 @@ import { getRememberedEmail, sendPasswordReset } from "@/lib/auth";
 export const Route = createFileRoute("/forgot-password")({
   head: () => ({
     meta: [
-      { title: "Reset password — Lumen" },
-      { name: "description", content: "Reset the password for your Lumen account." },
-      { property: "og:title", content: "Reset password — Lumen" },
-      { property: "og:description", content: "Reset the password for your Lumen account." },
+      { title: "Reset password — Xperter" },
+      { name: "description", content: "Reset the password for your Xperter account." },
+      { property: "og:title", content: "Reset password — Xperter" },
+      { property: "og:description", content: "Reset the password for your Xperter account." },
     ],
   }),
   component: Forgot,

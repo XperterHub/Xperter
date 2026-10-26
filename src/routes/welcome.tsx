@@ -9,10 +9,10 @@ import { formatVaultFolderName } from "@/lib/username-id";
 export const Route = createFileRoute("/welcome")({
   head: () => ({
     meta: [
-      { title: "Account — Lumen" },
-      { name: "description", content: "Manage your signed-in Lumen account." },
-      { property: "og:title", content: "Account — Lumen" },
-      { property: "og:description", content: "Manage your signed-in Lumen account." },
+      { title: "Account — Xperter" },
+      { name: "description", content: "Manage your signed-in Xperter account." },
+      { property: "og:title", content: "Account — Xperter" },
+      { property: "og:description", content: "Manage your signed-in Xperter account." },
     ],
   }),
   component: Welcome,

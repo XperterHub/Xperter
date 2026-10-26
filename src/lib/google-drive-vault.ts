@@ -335,7 +335,7 @@ export async function ensureDriveUserDocFolder(
     body: JSON.stringify({
       name: folderName,
       mimeType: "application/vnd.google-apps.folder",
-      description: `Lumen Personal Document Vault folder (${folderName})`,
+      description: `Xperter Personal Document Vault folder (${folderName})`,
     }),
   });
 
@@ -398,7 +398,7 @@ export async function uploadVaultDocumentToGoogleDrive(params: {
   const metadata = {
     name: fullFileName,
     parents: [folderId],
-    description: `${def?.label || "Personal Document"} (${baseName}) stored via Lumen Profile Vault`,
+    description: `${def?.label || "Personal Document"} (${baseName}) stored via Xperter Profile Vault`,
   };
 
   const form = new FormData();

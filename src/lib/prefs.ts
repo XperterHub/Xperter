@@ -9,8 +9,8 @@ export type Prefs = {
   hue: number;
 };
 
-export const PREFS_KEY = "lumen-prefs";
-export const USER_PREFS_PREFIX = "lumen-prefs:";
+export const PREFS_KEY = "xperter-prefs";
+export const USER_PREFS_PREFIX = "xperter-prefs:";
 
 export const DEFAULT_PREFS: Prefs = {
   theme: "light",
@@ -59,12 +59,14 @@ export function loadPrefs(uid?: string | null): Prefs {
   const targetUid = uid !== undefined ? uid : activePrefsUid;
   try {
     if (targetUid) {
-      const userRaw = localStorage.getItem(getUserPrefsKey(targetUid));
+      const userRaw =
+        localStorage.getItem(getUserPrefsKey(targetUid)) ||
+        localStorage.getItem(`lumen-prefs:${targetUid}`);
       if (userRaw) {
         return { ...DEFAULT_PREFS, ...JSON.parse(userRaw) };
       }
     }
-    const raw = localStorage.getItem(PREFS_KEY);
+    const raw = localStorage.getItem(PREFS_KEY) || localStorage.getItem("lumen-prefs");
     if (!raw) return DEFAULT_PREFS;
     return { ...DEFAULT_PREFS, ...JSON.parse(raw) };
   } catch {

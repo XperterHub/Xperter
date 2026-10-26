@@ -9,7 +9,7 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children, to, activeProps: _activeProps, ...props }: any) => <a href={to} {...props}>{children}</a>,
 }));
 vi.mock("@/components/SilkBackground", () => ({ SilkBackground: () => null }));
-vi.mock("@/components/BrandMark", () => ({ BrandMark: () => <span>Lumen</span> }));
+vi.mock("@/components/BrandMark", () => ({ BrandMark: () => <span>Xperter</span> }));
 vi.mock("@/components/SettingsControl", () => ({
   SettingsControl: () => null,
   triggerSettingsHaptic: () => {},
