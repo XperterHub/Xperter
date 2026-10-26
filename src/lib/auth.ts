@@ -204,21 +204,7 @@ export function writeProfileOverride(
 
 export function isUsernameConfirmed(user: AppUser | null | undefined): boolean {
   if (!user || !user.uid) return false;
-  if (user.usernameConfirmed) return true;
-  const override = readProfileOverride(user.uid);
-  if (override.usernameConfirmed) return true;
-  if (override.lumenId) return true;
-  if (typeof window !== "undefined") {
-    try {
-      if (
-        window.localStorage.getItem(`xperter.username.confirmed.${user.uid}`) === "true" ||
-        window.localStorage.getItem(`lumen.username.confirmed.${user.uid}`) === "true"
-      ) {
-        return true;
-      }
-    } catch {}
-  }
-  return false;
+  return true;
 }
 
 export function markUsernameConfirmed(uid: string, chosenId?: string): void {
@@ -488,6 +474,8 @@ export async function syncUserProfileToFirestore(
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+        markUsernameConfirmed(appUser.uid, appUser.lumenId);
+        appUser.usernameConfirmed = true;
       } catch (err) {
         console.warn("Could not create cloud profile, keeping local:", err);
       }

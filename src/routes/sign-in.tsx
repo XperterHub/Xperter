@@ -1,29 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Mail, Lock, UserCheck } from "lucide-react";
+import { Mail, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { AuthLayout, Divider, Field, GoogleButton, InkButton } from "@/components/auth/AuthUI";
-import { UniqueUsernameField } from "@/components/auth/UniqueUsernameField";
 import {
-  checkUsernameAvailability,
   getRememberedEmail,
   getRememberMePreference,
-  isUsernameConfirmed,
-  markUsernameConfirmed,
   signInWithEmailPassword,
   signInWithGoogle,
-  updateUserProfile,
   useAuthState,
-  type AppUser,
-  type UsernameAvailabilityStatus,
 } from "@/lib/auth";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 
 export const Route = createFileRoute("/sign-in")({
   head: () => ({
@@ -49,14 +35,6 @@ function SignIn() {
   }>({});
   const [loading, setLoading] = useState(false);
 
-  // Google Login -> Pick Username ID Modal
-  const [pendingGoogleUser, setPendingGoogleUser] = useState<AppUser | null>(null);
-  const [googleUsername, setGoogleUsername] = useState("");
-  const [googleUsernameAvailability, setGoogleUsernameAvailability] =
-    useState<UsernameAvailabilityStatus | null>(null);
-  const [googleUsernameError, setGoogleUsernameError] = useState<string | undefined>();
-  const [savingGoogleUsername, setSavingGoogleUsername] = useState(false);
-
   useEffect(() => {
     const savedEmail = getRememberedEmail();
     if (savedEmail) {
@@ -66,24 +44,10 @@ function SignIn() {
   }, []);
 
   useEffect(() => {
-    if (!authReady || !user) return;
-
-    if (!isUsernameConfirmed(user)) {
-      setPendingGoogleUser(user);
-      setGoogleUsername(
-        (prev) =>
-          prev ||
-          user.lumenId ||
-          user.email?.split("@")[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") ||
-          "user",
-      );
-      return;
-    }
-
-    if (!pendingGoogleUser) {
+    if (authReady && user) {
       nav({ to: "/app/messages" });
     }
-  }, [authReady, user, pendingGoogleUser, nav]);
+  }, [authReady, user, nav]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,15 +74,8 @@ function SignIn() {
     setLoading(true);
     try {
       const authedUser = await signInWithGoogle(remember);
-      const defaultId = authedUser.email?.split("@")[0]?.replace(/[^a-zA-Z0-9_-]/g, "_") || "user";
-
-      if (isUsernameConfirmed(authedUser)) {
-        toast.success("Signed in with Google");
-        nav({ to: "/app/messages" });
-      } else {
-        setPendingGoogleUser(authedUser);
-        setGoogleUsername(authedUser.lumenId || defaultId);
-      }
+      toast.success(`Welcome back, ${authedUser.name || "User"}!`);
+      nav({ to: "/app/messages" });
     } catch (err: any) {
       console.error("Google sign-in error:", err);
       if (err?.code === "auth/unauthorized-domain") {
@@ -137,38 +94,6 @@ function SignIn() {
       }
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleConfirmGoogleUsername = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pendingGoogleUser) return;
-
-    const clean = googleUsername.trim();
-    if (!clean) {
-      setGoogleUsernameError("Please enter a username ID");
-      return;
-    }
-
-    const check = await checkUsernameAvailability(clean, pendingGoogleUser.uid);
-    if (!check.available) {
-      setGoogleUsernameError(check.message);
-      return;
-    }
-
-    setSavingGoogleUsername(true);
-    try {
-      await updateUserProfile({
-        lumenId: check.normalized,
-      });
-    } catch (err: any) {
-      console.warn("Could not sync username to cloud, continuing locally:", err);
-    } finally {
-      markUsernameConfirmed(pendingGoogleUser.uid, check.normalized);
-      toast.success(`Welcome to Xperter, @${check.normalized}!`);
-      setPendingGoogleUser(null);
-      setSavingGoogleUsername(false);
-      nav({ to: "/app/messages" });
     }
   };
 
@@ -219,69 +144,6 @@ function SignIn() {
           Sign up
         </Link>
       </p>
-
-      {/* Google Sign-in: Username ID Confirmation Popup Modal */}
-      <Dialog
-        open={Boolean(pendingGoogleUser)}
-        onOpenChange={(open) => {
-          if (!open && !savingGoogleUsername && pendingGoogleUser) {
-            markUsernameConfirmed(pendingGoogleUser.uid);
-            setPendingGoogleUser(null);
-            nav({ to: "/app/messages" });
-          }
-        }}
-      >
-        <DialogContent
-          className="glass border-glass-edge sm:max-w-md p-6 text-foreground frost-panel shadow-2xl"
-          data-testid="google-username-modal"
-          onPointerDownOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-        >
-          <DialogHeader>
-            <div className="flex items-center gap-3 mb-1">
-              <div className="bg-pearl flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-glass-edge">
-                <UserCheck className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <DialogTitle className="text-base font-bold text-foreground">
-                  Choose your Username ID
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-foreground">
-                  Please pick and confirm your unique User ID to proceed to your workspace.
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <form onSubmit={handleConfirmGoogleUsername} className="space-y-4 pt-2">
-            <UniqueUsernameField
-              value={googleUsername}
-              onChange={(val) => {
-                setGoogleUsername(val);
-                setGoogleUsernameError(undefined);
-              }}
-              currentUid={pendingGoogleUser?.uid}
-              seedHint={pendingGoogleUser?.name || pendingGoogleUser?.email?.split("@")[0] || "lumen"}
-              error={googleUsernameError}
-              onAvailabilityChange={setGoogleUsernameAvailability}
-              compact
-            />
-
-            <div className="pt-2">
-              <InkButton
-                type="submit"
-                disabled={
-                  savingGoogleUsername ||
-                  !googleUsername.trim() ||
-                  googleUsernameAvailability?.available === false
-                }
-              >
-                {savingGoogleUsername ? "Confirming..." : "Confirm & Enter Workspace"}
-              </InkButton>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
     </AuthLayout>
   );
 }
