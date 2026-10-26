@@ -287,6 +287,81 @@ async function main() {
     }
     await deploySite(currentSite, token, fileHashMap, hashToBuffer);
   }
+
+  const domainsToAuthorize = [
+    'xperter-workspace.web.app',
+    'xperter-workspace.firebaseapp.com',
+    'nagarajps9894-sketch.github.io',
+    'xperter.github.io'
+  ];
+  await syncAuthorizedDomains(sa.project_id, token, domainsToAuthorize);
+}
+
+async function syncAuthorizedDomains(projectId: string, token: string, newDomains: string[]) {
+  console.log('\nChecking Firebase Auth authorized domains...');
+  const endpoints = [
+    `https://identitytoolkit.googleapis.com/admin/v2/projects/${projectId}/config`,
+    `https://identitytoolkit.googleapis.com/v1/projects/${projectId}/config`
+  ];
+
+  let currentDomains: string[] = [];
+  let activeEndpoint = endpoints[0];
+
+  for (const ep of endpoints) {
+    try {
+      const getRes = await fetch(ep, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Goog-User-Project': projectId
+        }
+      });
+      if (getRes.ok) {
+        const data = await getRes.json();
+        if (Array.isArray(data.authorizedDomains)) {
+          currentDomains = data.authorizedDomains;
+          activeEndpoint = ep;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  const merged = Array.from(new Set([
+    'localhost',
+    `${projectId}.firebaseapp.com`,
+    `${projectId}.web.app`,
+    ...currentDomains,
+    ...newDomains
+  ].filter(Boolean)));
+
+  const missing = newDomains.filter(d => !currentDomains.includes(d));
+  if (missing.length === 0 && currentDomains.length > 0) {
+    console.log('All required domains are already in Firebase Auth authorized domains.');
+    return;
+  }
+
+  console.log(`Adding missing authorized domains: ${missing.join(', ')}...`);
+  try {
+    const patchRes = await fetch(`${activeEndpoint}?updateMask=authorizedDomains`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Goog-User-Project': projectId
+      },
+      body: JSON.stringify({
+        authorizedDomains: merged
+      })
+    });
+
+    if (patchRes.ok) {
+      console.log('Successfully updated Firebase Auth authorized domains via API!');
+    } else {
+      console.warn(`Could not update authorized domains automatically (${patchRes.status}): ${await patchRes.text()}`);
+    }
+  } catch (err: any) {
+    console.warn('Failed to update authorized domains via API:', err?.message || err);
+  }
 }
 
 main().catch((err) => {
