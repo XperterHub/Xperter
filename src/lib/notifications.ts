@@ -236,6 +236,7 @@ export function buildAnnouncementItem(input: {
 
 export function synthesizeWorkspaceNotifications(params: {
   currentUserUid?: string;
+  currentUserLumenId?: string;
   contacts: Array<{
     id: string;
     name: string;
@@ -291,10 +292,16 @@ export function synthesizeWorkspaceNotifications(params: {
   }
 
   for (const req of params.friendRequests) {
-    const isIncoming =
-      params.currentUserUid &&
-      req.toUid === params.currentUserUid &&
-      req.fromUid !== params.currentUserUid;
+    const normUserLumen = (params.currentUserLumenId || "").trim().toLowerCase().replace(/^@+/, "");
+    const normReqToLumen = (req.toLumenId || "").trim().toLowerCase().replace(/^@+/, "");
+    const normReqFromLumen = (req.fromLumenId || "").trim().toLowerCase().replace(/^@+/, "");
+
+    const matchesToUid = Boolean(params.currentUserUid && req.toUid === params.currentUserUid);
+    const matchesToLumen = Boolean(normUserLumen && normReqToLumen === normUserLumen);
+    const matchesFromUid = Boolean(params.currentUserUid && req.fromUid === params.currentUserUid);
+    const matchesFromLumen = Boolean(normUserLumen && normReqFromLumen === normUserLumen);
+
+    const isIncoming = (matchesToUid || matchesToLumen) && !matchesFromUid && !matchesFromLumen;
     const notifId = `notif_freq_${req.id}_${req.status}`;
     if (req.status === "pending") {
       byId.set(notifId, {

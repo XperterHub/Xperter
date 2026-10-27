@@ -264,9 +264,11 @@ export function WorkspaceInboxControl({
       mergeRequests();
     });
 
-    // Subscribe to realtime broadcast events
+    // Subscribe to realtime broadcast events and cross-device cloud relay
     let unsubBroadcast: (() => void) | undefined;
-    import("@/lib/realtime-sync").then(({ subscribeToRealtimeEvents, getSharedFriendRequestsForUser }) => {
+    let unsubCloud: (() => void) | undefined;
+    import("@/lib/realtime-sync").then(({ connectUserCloudRelay, subscribeToRealtimeEvents, getSharedFriendRequestsForUser }) => {
+      unsubCloud = connectUserCloudRelay(user.lumenId, user.uid);
       unsubBroadcast = subscribeToRealtimeEvents((event) => {
         if (event.type === "FRIEND_REQUEST_SENT" || event.type === "FRIEND_REQUEST_UPDATED") {
           sharedList = getSharedFriendRequestsForUser(user.lumenId, user.uid).map((r) => ({
@@ -352,6 +354,7 @@ export function WorkspaceInboxControl({
     );
 
     return () => {
+      unsubCloud?.();
       unsubBroadcast?.();
       unsubUid();
       unsubLumen();
@@ -363,6 +366,7 @@ export function WorkspaceInboxControl({
   const synthesizedNotifications = useMemo(() => {
     return synthesizeWorkspaceNotifications({
       currentUserUid: user?.uid,
+      currentUserLumenId: user?.lumenId,
       contacts: activeConversations,
       friendRequests: cloudFriendRequests,
       announcements,
@@ -372,6 +376,7 @@ export function WorkspaceInboxControl({
     });
   }, [
     user?.uid,
+    user?.lumenId,
     activeConversations,
     cloudFriendRequests,
     announcements,

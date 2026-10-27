@@ -55,6 +55,8 @@ export const SHARED_CONVERSATIONS_KEY = "xperter.shared_conversations.v2";
 export const SHARED_MESSAGES_KEY_PREFIX = "xperter.messages.shared.";
 export const SHARED_USER_DIRECTORY_KEY = "xperter.shared_user_directory.v2";
 
+const CLOUD_RELAY_BASE = "https://ntfy.sh";
+
 let broadcastChannel: BroadcastChannel | null = null;
 const eventListeners = new Set<(event: RealtimeEvent) => void>();
 
@@ -91,7 +93,7 @@ export function subscribeToRealtimeEvents(
   callback: (event: RealtimeEvent) => void,
 ): () => void {
   eventListeners.add(callback);
-  getBroadcastChannel(); // Initialize channel if not already done
+  getBroadcastChannel();
 
   const storageHandler = (e: StorageEvent) => {
     if (!e.newValue) return;
@@ -149,6 +151,276 @@ export function broadcastRealtimeEvent(event: RealtimeEvent): void {
   }
 }
 
+/**
+ * Publishes an event to the global cloud relay so users across different browsers,
+ * incognito windows, mobile phones, or laptops receive it instantly.
+ */
+export async function publishToCloudRelay(topic: string, event: RealtimeEvent): Promise<void> {
+  if (typeof window === "undefined" || !topic) return;
+  try {
+    const cleanTopic = topic.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase();
+    await fetch(`${CLOUD_RELAY_BASE}/${cleanTopic}`, {
+      method: "POST",
+      headers: {
+        "Title": "Xperter Sync",
+        "Priority": "high",
+      },
+      body: JSON.stringify(event),
+    });
+  } catch {
+    // Ignore relay transport failure
+  }
+}
+
+function handleIncomingRelayEvent(ev: RealtimeEvent) {
+  if (!ev || typeof ev !== "object" || !ev.type) return;
+
+  if (ev.type === "FRIEND_REQUEST_SENT" && ev.request) {
+    const all = readAllSharedFriendRequests();
+    if (!all.some((r) => r.id === ev.request.id)) {
+      writeAllSharedFriendRequests([ev.request, ...all]);
+    }
+    try {
+      const fromKey = `lumen.requests.${ev.request.fromUid}`;
+      const toKey = `lumen.requests.${ev.request.toUid}`;
+      const rawTo = window.localStorage.getItem(toKey);
+      const toList = rawTo ? JSON.parse(rawTo) : [];
+      window.localStorage.setItem(
+        toKey,
+        JSON.stringify([ev.request, ...(Array.isArray(toList) ? toList.filter((x: any) => x.id !== ev.request.id) : [])]),
+      );
+    } catch {}
+  } else if (ev.type === "FRIEND_REQUEST_UPDATED") {
+    const all = readAllSharedFriendRequests();
+    const next = all.map((r) =>
+      r.id === ev.requestId ? { ...r, status: ev.status, updatedAtMs: Date.now() } : r,
+    );
+    writeAllSharedFriendRequests(next);
+    try {
+      const targetReq = all.find((r) => r.id === ev.requestId);
+      if (targetReq) {
+        for (const uid of [targetReq.fromUid, targetReq.toUid]) {
+          if (!uid) continue;
+          const key = `lumen.requests.${uid}`;
+          const raw = window.localStorage.getItem(key);
+          if (raw) {
+            const list = JSON.parse(raw);
+            if (Array.isArray(list)) {
+              window.localStorage.setItem(
+                key,
+                JSON.stringify(list.map((r: any) => r.id === ev.requestId ? { ...r, status: ev.status } : r)),
+              );
+            }
+          }
+        }
+      }
+    } catch {}
+  } else if (ev.type === "CONVERSATION_UPSERTED" && ev.conversation) {
+    const all = readAllSharedConversations();
+    const idx = all.findIndex((c) => c.id === ev.conversation.id);
+    let next: RealtimeConversation[];
+    if (idx >= 0) {
+      next = [...all];
+      next[idx] = { ...next[idx]!, ...ev.conversation };
+    } else {
+      next = [ev.conversation, ...all];
+    }
+    writeAllSharedConversations(next);
+    try {
+      for (const uid of ev.conversation.participantIds) {
+        if (!uid) continue;
+        const key = `lumen.chats.${uid}`;
+        const raw = window.localStorage.getItem(key);
+        const list = raw ? JSON.parse(raw) : [];
+        const existingIdx = Array.isArray(list) ? list.findIndex((c: any) => c.id === ev.conversation.id) : -1;
+        let updatedChats = Array.isArray(list) ? [...list] : [];
+        if (existingIdx >= 0) {
+          updatedChats[existingIdx] = { ...updatedChats[existingIdx], ...ev.conversation };
+        } else {
+          updatedChats.unshift(ev.conversation);
+        }
+        window.localStorage.setItem(key, JSON.stringify(updatedChats));
+      }
+    } catch {}
+  } else if (ev.type === "MESSAGE_SENT" && ev.convId && ev.message) {
+    const existing = readSharedMessages(ev.convId);
+    if (!existing.some((m) => m.id === ev.message.id)) {
+      try {
+        window.localStorage.setItem(
+          `${SHARED_MESSAGES_KEY_PREFIX}${ev.convId}`,
+          JSON.stringify([...existing, ev.message]),
+        );
+      } catch {}
+    }
+  }
+
+  notifyListeners(ev);
+}
+
+/**
+ * Connects the current user to their private cloud relay inbox topic(s).
+ * Polls for missed messages while offline (past 24h) and listens live via WebSocket.
+ */
+export function connectUserCloudRelay(lumenId: string, uid?: string): () => void {
+  if (typeof window === "undefined" || (!lumenId && !uid)) return () => {};
+
+  const topics = new Set<string>();
+  if (lumenId) {
+    const normLumen = normalizeLumenId(lumenId).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (normLumen) topics.add(`xperter_inbox_${normLumen}`);
+    const rawLumen = lumenId.trim().replace(/^@+/, "").toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (rawLumen) topics.add(`xperter_inbox_${rawLumen}`);
+  }
+  if (uid) {
+    const cleanUid = sanitizeId(uid).toLowerCase();
+    if (cleanUid) topics.add(`xperter_inbox_${cleanUid}`);
+  }
+
+  const cleanups: Array<() => void> = [];
+
+  for (const topic of topics) {
+    // 1. Immediately retrieve pending offline messages from past 24 hours
+    const pollMissed = async () => {
+      try {
+        const res = await fetch(`${CLOUD_RELAY_BASE}/${topic}/json?poll=1&since=24h`);
+        if (!res.ok) return;
+        const text = await res.text();
+        const lines = text.trim().split("\n").filter(Boolean);
+        for (const line of lines) {
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.event === "message" && parsed.message) {
+              const ev = JSON.parse(parsed.message) as RealtimeEvent;
+              handleIncomingRelayEvent(ev);
+            }
+          } catch {}
+        }
+      } catch {}
+    };
+    void pollMissed();
+
+    // 2. Open live WebSocket with since=24h for zero-gap delivery
+    let ws: WebSocket | null = null;
+    let isClosed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connectWs = () => {
+      if (isClosed) return;
+      try {
+        ws = new WebSocket(`wss://ntfy.sh/${topic}/ws?since=24h`);
+        ws.onmessage = (msgEvent) => {
+          try {
+            const parsed = JSON.parse(msgEvent.data);
+            if (parsed.event === "message" && parsed.message) {
+              const ev = JSON.parse(parsed.message) as RealtimeEvent;
+              handleIncomingRelayEvent(ev);
+            }
+          } catch {}
+        };
+        ws.onclose = () => {
+          if (!isClosed) {
+            reconnectTimer = setTimeout(connectWs, 3000);
+          }
+        };
+        ws.onerror = () => {
+          try { ws?.close(); } catch {}
+        };
+      } catch {
+        if (!isClosed) {
+          reconnectTimer = setTimeout(connectWs, 5000);
+        }
+      }
+    };
+
+    connectWs();
+
+    cleanups.push(() => {
+      isClosed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try {
+        ws?.close();
+      } catch {}
+    });
+  }
+
+  return () => {
+    for (const fn of cleanups) {
+      fn();
+    }
+  };
+}
+
+/**
+ * Connects the active conversation to its private cloud relay topic for sub-second chat replication.
+ */
+export function connectConversationCloudRelay(convId: string): () => void {
+  if (typeof window === "undefined" || !convId) return () => {};
+
+  const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const topic = `xperter_conv_${cleanConv}`;
+
+  const pollMissed = async () => {
+    try {
+      const res = await fetch(`${CLOUD_RELAY_BASE}/${topic}/json?poll=1&since=24h`);
+      if (!res.ok) return;
+      const text = await res.text();
+      const lines = text.trim().split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          if (parsed.event === "message" && parsed.message) {
+            const ev = JSON.parse(parsed.message) as RealtimeEvent;
+            handleIncomingRelayEvent(ev);
+          }
+        } catch {}
+      }
+    } catch {}
+  };
+  void pollMissed();
+
+  let ws: WebSocket | null = null;
+  let isClosed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const connectWs = () => {
+    if (isClosed) return;
+    try {
+      ws = new WebSocket(`wss://ntfy.sh/${topic}/ws?since=24h`);
+      ws.onmessage = (msgEvent) => {
+        try {
+          const parsed = JSON.parse(msgEvent.data);
+          if (parsed.event === "message" && parsed.message) {
+            const ev = JSON.parse(parsed.message) as RealtimeEvent;
+            handleIncomingRelayEvent(ev);
+          }
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (!isClosed) {
+          reconnectTimer = setTimeout(connectWs, 3000);
+        }
+      };
+      ws.onerror = () => {
+        try { ws?.close(); } catch {}
+      };
+    } catch {
+      if (!isClosed) {
+        reconnectTimer = setTimeout(connectWs, 5000);
+      }
+    }
+  };
+
+  connectWs();
+
+  return () => {
+    isClosed = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    try {
+      ws?.close();
+    } catch {}
+  };
+}
+
 export function readAllSharedFriendRequests(): RealtimeFriendRequest[] {
   if (typeof window === "undefined") return [];
   try {
@@ -180,7 +452,7 @@ export function saveSharedFriendRequest(req: RealtimeFriendRequest): void {
   }
   writeAllSharedFriendRequests(updated);
 
-  // Also sync to per-user legacy keys for safety
+  // Sync to per-user legacy keys for safety
   try {
     const fromKey = `lumen.requests.${req.fromUid}`;
     const toKey = `lumen.requests.${req.toUid}`;
@@ -200,18 +472,53 @@ export function saveSharedFriendRequest(req: RealtimeFriendRequest): void {
   } catch {}
 
   broadcastRealtimeEvent({ type: "FRIEND_REQUEST_SENT", request: req });
+
+  // Relay to recipient's private cloud inbox
+  const targetTopics = new Set<string>();
+  if (req.toLumenId) {
+    const norm = normalizeLumenId(req.toLumenId).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (norm) targetTopics.add(`xperter_inbox_${norm}`);
+    const raw = req.toLumenId.trim().replace(/^@+/, "").toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (raw) targetTopics.add(`xperter_inbox_${raw}`);
+  }
+  if (req.toUid) {
+    const cleanUid = sanitizeId(req.toUid).toLowerCase();
+    if (cleanUid) targetTopics.add(`xperter_inbox_${cleanUid}`);
+  }
+  for (const topic of targetTopics) {
+    void publishToCloudRelay(topic, { type: "FRIEND_REQUEST_SENT", request: req });
+  }
 }
 
 export function updateSharedFriendRequestStatus(
   requestId: string,
   status: "accepted" | "declined",
+  targetLumenId?: string,
 ): void {
   const all = readAllSharedFriendRequests();
+  const targetReq = all.find((r) => r.id === requestId);
   const next = all.map((r) =>
     r.id === requestId ? { ...r, status, updatedAtMs: Date.now() } : r,
   );
   writeAllSharedFriendRequests(next);
   broadcastRealtimeEvent({ type: "FRIEND_REQUEST_UPDATED", requestId, status });
+
+  // Relay status to the sender's private cloud inbox
+  const senderTopics = new Set<string>();
+  const fromLumen = targetLumenId || targetReq?.fromLumenId;
+  if (fromLumen) {
+    const norm = normalizeLumenId(fromLumen).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (norm) senderTopics.add(`xperter_inbox_${norm}`);
+    const raw = fromLumen.trim().replace(/^@+/, "").toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (raw) senderTopics.add(`xperter_inbox_${raw}`);
+  }
+  if (targetReq?.fromUid) {
+    const cleanUid = sanitizeId(targetReq.fromUid).toLowerCase();
+    if (cleanUid) senderTopics.add(`xperter_inbox_${cleanUid}`);
+  }
+  for (const topic of senderTopics) {
+    void publishToCloudRelay(topic, { type: "FRIEND_REQUEST_UPDATED", requestId, status });
+  }
 }
 
 export function getSharedFriendRequestsForUser(
@@ -220,11 +527,14 @@ export function getSharedFriendRequestsForUser(
 ): RealtimeFriendRequest[] {
   const all = readAllSharedFriendRequests();
   const normLumen = normalizeLumenId(lumenId).toLowerCase();
-  const cleanUid = uid ? sanitizeId(uid) : "";
+  const rawLumen = (lumenId || "").trim().toLowerCase().replace(/^@+/, "");
+  const cleanUid = uid ? sanitizeId(uid).toLowerCase() : "";
   return all.filter((r) => {
     const targetLumen = normalizeLumenId(r.toLumenId).toLowerCase();
-    const matchesLumen = targetLumen === normLumen;
-    const matchesUid = cleanUid ? r.toUid === cleanUid : false;
+    const rawTarget = (r.toLumenId || "").trim().toLowerCase().replace(/^@+/, "");
+    const targetUid = sanitizeId(r.toUid).toLowerCase();
+    const matchesLumen = Boolean(normLumen && (targetLumen === normLumen || rawTarget === normLumen || targetLumen === rawLumen));
+    const matchesUid = Boolean(cleanUid && (targetUid === cleanUid || targetUid === `usr_${normLumen}` || targetUid === `dir_${normLumen}`));
     return matchesLumen || matchesUid;
   });
 }
@@ -235,11 +545,14 @@ export function getSharedFriendRequestsSentByUser(
 ): RealtimeFriendRequest[] {
   const all = readAllSharedFriendRequests();
   const normLumen = normalizeLumenId(lumenId).toLowerCase();
-  const cleanUid = uid ? sanitizeId(uid) : "";
+  const rawLumen = (lumenId || "").trim().toLowerCase().replace(/^@+/, "");
+  const cleanUid = uid ? sanitizeId(uid).toLowerCase() : "";
   return all.filter((r) => {
     const fromLumen = normalizeLumenId(r.fromLumenId).toLowerCase();
-    const matchesLumen = fromLumen === normLumen;
-    const matchesUid = cleanUid ? r.fromUid === cleanUid : false;
+    const rawFrom = (r.fromLumenId || "").trim().toLowerCase().replace(/^@+/, "");
+    const fromUid = sanitizeId(r.fromUid).toLowerCase();
+    const matchesLumen = Boolean(normLumen && (fromLumen === normLumen || rawFrom === normLumen || fromLumen === rawLumen));
+    const matchesUid = Boolean(cleanUid && fromUid === cleanUid);
     return matchesLumen || matchesUid;
   });
 }
@@ -275,7 +588,7 @@ export function saveSharedConversation(conv: RealtimeConversation): void {
   }
   writeAllSharedConversations(updated);
 
-  // Also sync to per-user contacts keys
+  // Sync to per-user contacts keys
   try {
     for (const uid of conv.participantIds) {
       if (!uid) continue;
@@ -288,6 +601,15 @@ export function saveSharedConversation(conv: RealtimeConversation): void {
   } catch {}
 
   broadcastRealtimeEvent({ type: "CONVERSATION_UPSERTED", conversation: conv });
+
+  // Relay conversation to participants
+  for (const pLumen of conv.participantLumenIds) {
+    const norm = normalizeLumenId(pLumen).toLowerCase();
+    if (norm) {
+      const topic = `xperter_inbox_${norm.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+      void publishToCloudRelay(topic, { type: "CONVERSATION_UPSERTED", conversation: conv });
+    }
+  }
 }
 
 export function getSharedConversationsForUser(
@@ -335,6 +657,14 @@ export function saveSharedMessage(convId: string, message: any): void {
   } catch {}
 
   broadcastRealtimeEvent({ type: "MESSAGE_SENT", convId, message });
+
+  // Relay message to conversation topic
+  const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  void publishToCloudRelay(`xperter_conv_${cleanConv}`, {
+    type: "MESSAGE_SENT",
+    convId,
+    message,
+  });
 }
 
 export function readAllSharedDirectoryUsers(): RealtimeDirectoryUser[] {
@@ -343,7 +673,7 @@ export function readAllSharedDirectoryUsers(): RealtimeDirectoryUser[] {
     const raw = window.localStorage.getItem(SHARED_USER_DIRECTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? (parsed as RealtimeDirectoryUser[]) : [];
   } catch {
     return [];
   }
@@ -381,4 +711,3 @@ export function saveSharedDirectoryUser(
 export function getSharedDirectoryUsers(): RealtimeDirectoryUser[] {
   return readAllSharedDirectoryUsers();
 }
-

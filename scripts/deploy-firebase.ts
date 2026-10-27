@@ -295,7 +295,37 @@ async function main() {
     'xperter.github.io'
   ];
   await syncAuthorizedDomains(sa.project_id, token, domainsToAuthorize);
+  await ensureFirestoreDatabaseExists(sa.project_id, token);
   await deployFirestoreRules(sa.project_id, token);
+}
+
+async function ensureFirestoreDatabaseExists(projectId: string, token: string) {
+  try {
+    const res = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.status === 404) {
+      console.log('Default Firestore database does not exist. Attempting creation in project:', projectId);
+      const createRes = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases?databaseId=(default)`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          locationId: 'nam5',
+          type: 'FIRESTORE_NATIVE'
+        })
+      });
+      if (createRes.ok) {
+        console.log('Successfully requested Firestore default database creation!');
+      } else {
+        console.warn(`Firestore database creation note (${createRes.status}):`, await createRes.text());
+      }
+    }
+  } catch (err: any) {
+    console.warn('Note on Firestore database check:', err?.message || err);
+  }
 }
 
 async function deployFirestoreRules(projectId: string, token: string) {

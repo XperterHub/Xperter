@@ -63,6 +63,8 @@ import {
 } from "@/lib/conversations";
 import {
   broadcastRealtimeEvent,
+  connectConversationCloudRelay,
+  connectUserCloudRelay,
   getSharedConversationsForUser,
   getSharedFriendRequestsForUser,
   getSharedFriendRequestsSentByUser,
@@ -1084,6 +1086,7 @@ function Messages() {
     };
     refreshShared();
 
+    const unsubCloudRelay = connectUserCloudRelay(user.lumenId, user.uid);
     const unsubRealtime = subscribeToRealtimeEvents((ev) => {
       if (ev.type === "FRIEND_REQUEST_SENT" || ev.type === "FRIEND_REQUEST_UPDATED") {
         refreshShared();
@@ -1174,6 +1177,7 @@ function Messages() {
     );
 
     return () => {
+      unsubCloudRelay();
       unsubRealtime();
       unsubOut();
       unsubIn();
@@ -1253,7 +1257,8 @@ function Messages() {
       }
     });
 
-    // Always subscribe to Firestore messages
+    // Connect to cross-device cloud relay for active conversation
+    const unsubConvRelay = connectConversationCloudRelay(activeId);
 
     const msgsQuery = query(
       collection(db, "conversations", activeId, "messages"),
@@ -1342,6 +1347,7 @@ function Messages() {
     );
 
     return () => {
+      unsubConvRelay();
       unsubBroadcast();
       unsubCloud();
     };
@@ -2245,15 +2251,19 @@ function Messages() {
 
   const acceptFriendRequestAndStartConvo = async (req: FriendRequestItem) => {
     if (!user) return;
+    const userNorm = normalizeLumenId(user.lumenId || "").toLowerCase();
+    const reqToNorm = normalizeLumenId(req.toLumenId || "").toLowerCase();
+    const reqFromNorm = normalizeLumenId(req.fromLumenId || "").toLowerCase();
     const isIncoming =
-      (req.toUid === user.uid || normalizeLumenId(req.toLumenId) === user.lumenId) &&
-      req.fromUid !== user.uid;
+      (req.toUid === user.uid || (userNorm && reqToNorm === userNorm)) &&
+      req.fromUid !== user.uid &&
+      (!userNorm || reqFromNorm !== userNorm);
     const friendLumenId = isIncoming ? req.fromLumenId : req.toLumenId;
     const friendName = isIncoming ? req.fromName : req.toName;
     const friendUid = isIncoming ? req.fromUid : req.toUid;
 
-    // 1. Immediately update status in shared realtime store
-    updateSharedFriendRequestStatus(req.id, "accepted");
+    // 1. Immediately update status in shared realtime store and notify via cloud relay
+    updateSharedFriendRequestStatus(req.id, "accepted", friendLumenId);
 
     // 2. Update local state
     const updatedReqs = friendRequests.map((r) =>
@@ -3151,18 +3161,39 @@ function Messages() {
 
                     {/* Pending Incoming Friend Requests */}
                     {friendRequests.filter(
-                      (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                      (r) =>
+                        r.status === "pending" &&
+                        ((user?.uid && r.toUid === user.uid) ||
+                          (user?.lumenId &&
+                            (normalizeLumenId(r.toLumenId).toLowerCase() === normalizeLumenId(user.lumenId).toLowerCase() ||
+                              (r.toLumenId || "").trim().toLowerCase().replace(/^@+/, "") === normalizeLumenId(user.lumenId).toLowerCase() ||
+                              r.toUid === `usr_${normalizeLumenId(user.lumenId).toLowerCase()}` ||
+                              r.toUid === `dir_${normalizeLumenId(user.lumenId).toLowerCase()}`)))
                     ).length > 0 && (
                       <div className="mt-6 border-t border-glass-edge pt-4">
                         <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                           Incoming Requests ({friendRequests.filter(
-                            (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                            (r) =>
+                              r.status === "pending" &&
+                              ((user?.uid && r.toUid === user.uid) ||
+                                (user?.lumenId &&
+                                  (normalizeLumenId(r.toLumenId).toLowerCase() === normalizeLumenId(user.lumenId).toLowerCase() ||
+                                    (r.toLumenId || "").trim().toLowerCase().replace(/^@+/, "") === normalizeLumenId(user.lumenId).toLowerCase() ||
+                                    r.toUid === `usr_${normalizeLumenId(user.lumenId).toLowerCase()}` ||
+                                    r.toUid === `dir_${normalizeLumenId(user.lumenId).toLowerCase()}`)))
                           ).length})
                         </h4>
                         <div className="space-y-2.5">
                           {friendRequests
                             .filter(
-                              (r) => r.status === "pending" && (r.toUid === user?.uid || r.toLumenId === user?.lumenId)
+                              (r) =>
+                                r.status === "pending" &&
+                                ((user?.uid && r.toUid === user.uid) ||
+                                  (user?.lumenId &&
+                                    (normalizeLumenId(r.toLumenId).toLowerCase() === normalizeLumenId(user.lumenId).toLowerCase() ||
+                                      (r.toLumenId || "").trim().toLowerCase().replace(/^@+/, "") === normalizeLumenId(user.lumenId).toLowerCase() ||
+                                      r.toUid === `usr_${normalizeLumenId(user.lumenId).toLowerCase()}` ||
+                                      r.toUid === `dir_${normalizeLumenId(user.lumenId).toLowerCase()}`)))
                             )
                             .map((req) => (
                               <div
