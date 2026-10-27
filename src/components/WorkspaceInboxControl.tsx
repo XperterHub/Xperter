@@ -36,7 +36,7 @@ import {
 } from "@/components/SettingsControl";
 import { useAuthState } from "@/lib/auth";
 import { createConversationBetweenUsers } from "@/lib/conversations";
-import { db } from "@/lib/firebase";
+import { db, normalizeLumenId } from "@/lib/firebase";
 import {
   countUnreadAnnouncements,
   DEFAULT_NOTIFICATION_PREFS,
@@ -174,9 +174,9 @@ export function WorkspaceInboxControl({
 
   const [cloudConversations, setCloudConversations] = useState<ConvSummary[]>([]);
 
-  // Subscribe to Firestore conversations when cloud-authenticated
+  // Subscribe to Firestore conversations
   useEffect(() => {
-    if (!user?.isCloudUser || !user.uid) {
+    if (!user?.uid) {
       setCloudConversations([]);
       return;
     }
@@ -300,9 +300,34 @@ export function WorkspaceInboxControl({
       };
     };
 
+    const normId = normalizeLumenId(user.lumenId || "");
+    const lumenTargets = Array.from(new Set([
+      user.lumenId,
+      normId,
+      user.lumenId?.toLowerCase(),
+      user.lumenId?.toUpperCase(),
+      normId.toLowerCase(),
+      normId.toUpperCase(),
+      `@${normId.toLowerCase()}`,
+      `@${normId}`,
+    ])).filter((s) => Boolean(s) && (s as string).length >= 2) as string[];
+
+    const uidTargets = Array.from(new Set([
+      user.uid,
+      user.uid.toLowerCase(),
+      normId,
+      normId.toLowerCase(),
+      `usr_${normId.toLowerCase()}`,
+      `usr_${normId}`,
+      `dir_${normId}`,
+      `dir_${normId.toLowerCase()}`,
+      `dir_${user.lumenId}`,
+      `dir_${user.lumenId?.toLowerCase()}`,
+    ])).filter((s) => Boolean(s) && (s as string).length >= 2) as string[];
+
     const qUid = query(
       collection(db, "friendRequests"),
-      where("toUid", "==", user.uid),
+      where("toUid", "in", uidTargets.slice(0, 10)),
     );
     const unsubUid = onSnapshot(
       qUid,
@@ -310,12 +335,12 @@ export function WorkspaceInboxControl({
         uidList = snap.docs.map((docSnap) => parseReq(docSnap.data(), docSnap.id)).filter((r) => r.status === "pending");
         mergeRequests();
       },
-      () => {},
+      (err) => console.warn("Inbox qUid listener offline:", err),
     );
 
     const qLumen = query(
       collection(db, "friendRequests"),
-      where("toLumenId", "==", user.lumenId),
+      where("toLumenId", "in", lumenTargets.slice(0, 10)),
     );
     const unsubLumen = onSnapshot(
       qLumen,
@@ -323,7 +348,7 @@ export function WorkspaceInboxControl({
         lumenIdList = snap.docs.map((docSnap) => parseReq(docSnap.data(), docSnap.id)).filter((r) => r.status === "pending");
         mergeRequests();
       },
-      () => {},
+      (err) => console.warn("Inbox qLumen listener offline:", err),
     );
 
     return () => {

@@ -598,9 +598,40 @@ function Messages() {
           const key = normalizeLumenId(u.lumenId) || u.uid;
           if (!map.has(key)) map.set(key, u);
         }
+
+        const normTyped = normalizeLumenId(trimmed);
+        const hasExactMatch = Array.from(map.values()).some(
+          (u) =>
+            normalizeLumenId(u.lumenId).toLowerCase() === normTyped.toLowerCase() ||
+            u.handle.toLowerCase() === `@${queryClean}`,
+        );
+        if (!hasExactMatch && normTyped.length >= 3 && normTyped.toLowerCase() !== normalizeLumenId(user?.lumenId || "").toLowerCase()) {
+          map.set(normTyped, {
+            uid: sanitizeId(`usr_${queryClean}`),
+            lumenId: normTyped,
+            displayName: `User @${normTyped}`,
+            handle: `@${queryClean}`,
+            photoURL: "",
+            isDirectIdMatch: true,
+          });
+        }
+
         setLiveUserResults(Array.from(map.values()));
       } catch {
-        setLiveUserResults([]);
+        const queryClean = trimmed.toLowerCase().replace(/^@+/, "");
+        const normTyped = normalizeLumenId(trimmed);
+        if (!user || normTyped.toLowerCase() !== normalizeLumenId(user.lumenId || "").toLowerCase()) {
+          setLiveUserResults([{
+            uid: sanitizeId(`usr_${queryClean}`),
+            lumenId: normTyped,
+            displayName: `User @${normTyped}`,
+            handle: `@${queryClean}`,
+            photoURL: "",
+            isDirectIdMatch: true,
+          }]);
+        } else {
+          setLiveUserResults([]);
+        }
       } finally {
         setIsSearchingLive(false);
       }
@@ -726,37 +757,34 @@ function Messages() {
       return;
     }
 
-    if (!user.isCloudUser) {
-      try {
-        const rawChats = window.localStorage.getItem(`lumen.chats.${user.uid}`);
-        const parsedChats = rawChats ? (JSON.parse(rawChats) as Contact[]) : [];
-        const rawMsgs = window.localStorage.getItem(`lumen.msgs.${user.uid}`);
-        const parsedMsgs = rawMsgs ? (JSON.parse(rawMsgs) as Record<string, Msg[]>) : {};
-        const rawReqs = window.localStorage.getItem(`lumen.requests.${user.uid}`);
-        const parsedReqs = rawReqs ? (JSON.parse(rawReqs) as FriendRequestItem[]) : [];
+    try {
+      const rawChats = window.localStorage.getItem(`lumen.chats.${user.uid}`);
+      const parsedChats = rawChats ? (JSON.parse(rawChats) as Contact[]) : [];
+      const rawMsgs = window.localStorage.getItem(`lumen.msgs.${user.uid}`);
+      const parsedMsgs = rawMsgs ? (JSON.parse(rawMsgs) as Record<string, Msg[]>) : {};
+      const rawReqs = window.localStorage.getItem(`lumen.requests.${user.uid}`);
+      const parsedReqs = rawReqs ? (JSON.parse(rawReqs) as FriendRequestItem[]) : [];
 
-        // Merge with shared conversations
-        const shared = getSharedConversationsForUser(user.lumenId, user.uid);
-        const byId = new Map<string, Contact>();
-        for (const c of [...parsedChats, ...shared]) {
-          byId.set(c.id, c as Contact);
-        }
-        const loadedChats = Array.from(byId.values());
-
+      const shared = getSharedConversationsForUser(user.lumenId, user.uid);
+      const byId = new Map<string, Contact>();
+      for (const c of [...parsedChats, ...shared]) {
+        byId.set(c.id, c as Contact);
+      }
+      const loadedChats = Array.from(byId.values());
+      if (loadedChats.length > 0) {
         setContacts(loadedChats);
-        setMessagesByChat(parsedMsgs && typeof parsedMsgs === "object" ? parsedMsgs : {});
-        setFriendRequests(Array.isArray(parsedReqs) ? parsedReqs : []);
         setActiveId((prev) => {
           if (prev && loadedChats.some((c) => c.id === prev)) return prev;
           return loadedChats[0]?.id ?? null;
         });
-      } catch {
-        setContacts([]);
-        setMessagesByChat({});
-        setFriendRequests([]);
       }
-      return;
-    }
+      if (parsedMsgs && typeof parsedMsgs === "object" && Object.keys(parsedMsgs).length > 0) {
+        setMessagesByChat(parsedMsgs);
+      }
+      if (Array.isArray(parsedReqs) && parsedReqs.length > 0) {
+        setFriendRequests(parsedReqs);
+      }
+    } catch {}
 
     let ownedList: Contact[] = [];
     let participantList: Contact[] = [];
@@ -1080,9 +1108,30 @@ function Messages() {
       };
     };
 
-    if (!user.isCloudUser) {
-      return () => unsubRealtime();
-    }
+    const normId = normalizeLumenId(user.lumenId || "");
+    const lumenTargets = Array.from(new Set([
+      user.lumenId,
+      normId,
+      user.lumenId?.toLowerCase(),
+      user.lumenId?.toUpperCase(),
+      normId.toLowerCase(),
+      normId.toUpperCase(),
+      `@${normId.toLowerCase()}`,
+      `@${normId}`,
+    ])).filter((s) => Boolean(s) && (s as string).length >= 2) as string[];
+
+    const uidTargets = Array.from(new Set([
+      user.uid,
+      user.uid.toLowerCase(),
+      normId,
+      normId.toLowerCase(),
+      `usr_${normId.toLowerCase()}`,
+      `usr_${normId}`,
+      `dir_${normId}`,
+      `dir_${normId.toLowerCase()}`,
+      `dir_${user.lumenId}`,
+      `dir_${user.lumenId?.toLowerCase()}`,
+    ])).filter((s) => Boolean(s) && (s as string).length >= 2) as string[];
 
     const outQuery = query(
       collection(db, "friendRequests"),
@@ -1090,11 +1139,11 @@ function Messages() {
     );
     const inQuery = query(
       collection(db, "friendRequests"),
-      where("toUid", "==", user.uid),
+      where("toUid", "in", uidTargets.slice(0, 10)),
     );
     const inLumenQuery = query(
       collection(db, "friendRequests"),
-      where("toLumenId", "==", user.lumenId),
+      where("toLumenId", "in", lumenTargets.slice(0, 10)),
     );
 
     const unsubOut = onSnapshot(
@@ -1204,9 +1253,7 @@ function Messages() {
       }
     });
 
-    if (!user.isCloudUser) {
-      return () => unsubBroadcast();
-    }
+    // Always subscribe to Firestore messages
 
     const msgsQuery = query(
       collection(db, "conversations", activeId, "messages"),
@@ -1607,10 +1654,7 @@ function Messages() {
     setContacts(nextContacts);
     saveLocalContacts(user.uid, nextContacts);
 
-    if (!isCloud) {
-      saveLocalMessages(user.uid, { ...messagesByChat, [convId]: [...existingList, localMsg] });
-      return;
-    }
+    saveLocalMessages(user.uid, { ...messagesByChat, [convId]: [...existingList, localMsg] });
 
     const msgPath = `conversations/${convId}/messages/${msgId}`;
 
@@ -1946,9 +1990,8 @@ function Messages() {
       }
     }
 
-    if (!resolvedToUid || resolvedToUid.startsWith("dir_")) {
-      toast.error(`Could not verify recipient with User ID @${targetLumenId}`);
-      return;
+    if (!resolvedToUid) {
+      resolvedToUid = sanitizeId(`usr_${targetLumenId.toLowerCase()}`);
     }
 
     const reqId = sanitizeId(`freq_${user.uid.slice(0, 20)}_${targetLumenId}_${Date.now().toString(36)}`);
@@ -1978,22 +2021,20 @@ function Messages() {
     }));
     toast.success(`Friend request sent to ${resolvedToName} (@${targetLumenId})`);
 
-    // 3. Write to Firestore in background when cloud-authenticated
-    if (isCloud) {
-      void setDoc(doc(db, "friendRequests", reqId), {
-        fromUid: user.uid,
-        fromLumenId: user.lumenId,
-        fromName: user.name.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH),
-        toUid: resolvedToUid,
-        toLumenId: targetLumenId,
-        toName: resolvedToName,
-        status: "pending",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }).catch((err) => {
-        console.warn("Firestore friend request write error:", err);
-      });
-    }
+    // 3. Write to Firestore in background
+    void setDoc(doc(db, "friendRequests", reqId), {
+      fromUid: user.uid,
+      fromLumenId: user.lumenId,
+      fromName: user.name.slice(0, BLUEPRINT_LIMITS.MAX_NAME_LENGTH),
+      toUid: resolvedToUid,
+      toLumenId: targetLumenId,
+      toName: resolvedToName,
+      status: "pending",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch((err) => {
+      console.warn("Firestore friend request write error:", err);
+    });
   };
 
   const getFriendshipStatus = (
@@ -2221,7 +2262,7 @@ function Messages() {
     saveLocalFriendRequests(user.uid, updatedReqs);
 
     // 3. Update in Firestore when cloud-authenticated
-    if (isCloud && req.status === "pending") {
+    if (req.status === "pending") {
       void updateDoc(doc(db, "friendRequests", req.id), {
         status: "accepted",
         updatedAt: serverTimestamp(),

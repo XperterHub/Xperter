@@ -386,10 +386,6 @@ export async function createConversationBetweenUsers(
     });
   } catch {}
 
-  if (!currentUser.isCloudUser) {
-    return record;
-  }
-
   const convPath = `conversations/${convId}`;
   const convRef = doc(db, "conversations", convId);
   try {

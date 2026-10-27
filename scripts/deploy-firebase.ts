@@ -333,8 +333,8 @@ async function deployFirestoreRules(projectId: string, token: string) {
     console.log(`Created Firestore ruleset: ${rulesetName}`);
 
     // Update release for cloud.firestore
-    const releaseRes = await fetch(
-      `https://firebaserules.googleapis.com/v1/projects/${projectId}/releases/cloud.firestore?updateMask=rulesetName`,
+    let releaseRes = await fetch(
+      `https://firebaserules.googleapis.com/v1/projects/${projectId}/releases/cloud.firestore`,
       {
         method: 'PATCH',
         headers: {
@@ -342,11 +342,31 @@ async function deployFirestoreRules(projectId: string, token: string) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          name: `projects/${projectId}/releases/cloud.firestore`,
-          rulesetName
+          release: {
+            name: `projects/${projectId}/releases/cloud.firestore`,
+            rulesetName
+          },
+          updateMask: 'rulesetName'
         })
       }
     );
+
+    if (releaseRes.status === 404) {
+      releaseRes = await fetch(
+        `https://firebaserules.googleapis.com/v1/projects/${projectId}/releases`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            name: `projects/${projectId}/releases/cloud.firestore`,
+            rulesetName
+          })
+        }
+      );
+    }
 
     if (releaseRes.ok) {
       console.log('Successfully deployed and released Firestore security rules!');
