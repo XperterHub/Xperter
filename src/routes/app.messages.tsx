@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Phone,
   Video,
@@ -512,6 +512,10 @@ function Messages() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [messagesByChat, setMessagesByChat] = useState<Record<string, Msg[]>>({});
   const [activeId, setActiveId] = useState<string | null>(null);
+  const activeIdRef = useRef<string | null>(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
   const [folder, setFolder] = useState<FolderFilter>("all");
   const [q, setQ] = useState("");
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
@@ -541,6 +545,64 @@ function Messages() {
   const [announcementTitle, setAnnouncementTitle] = useState("");
   const [announcementCategory, setAnnouncementCategory] = useState<AnnouncementCategory>("update");
   const [announcementSummary, setAnnouncementSummary] = useState("");
+  const mapRawToMsg = useCallback((d: any): Msg => {
+    if (!user) return d as Msg;
+    const isFromMe = String(d.senderUid || d.ownerId || "") === user.uid || (Boolean(user.lumenId) && String(d.senderLumenId || "") === user.lumenId);
+    const userMap = (d.reactionsUserMap || {}) as Record<string, string[]>;
+    const reactionsMap: Record<string, { count: number; me: boolean }> = {};
+    for (const [emoji, users] of Object.entries(userMap)) {
+      if (Array.isArray(users) && users.length > 0) {
+        const hasMe = users.includes(user.uid) || (Boolean(user.lumenId) && users.includes(user.lumenId));
+        reactionsMap[emoji] = { count: users.length, me: hasMe };
+      }
+    }
+    if (Object.keys(reactionsMap).length === 0 && d.reactions) {
+      Object.assign(reactionsMap, d.reactions);
+    }
+
+    const voteMap = (d.pollVotesUserMap || {}) as Record<string, string[]>;
+    const rawPollOpts = (d.pollOptionsRaw || d.pollOptions || (d.poll?.options?.map((o: any) => o.label)) || []) as string[];
+    const pollOptions = rawPollOpts.map((label: string, idx: number) => {
+      const voters = voteMap[label] || [];
+      const votedByMe = voters.includes(user.uid) || (Boolean(user.lumenId) && voters.includes(user.lumenId));
+      return {
+        id: `opt-${idx}`,
+        label,
+        votes: voters.length,
+        votedByMe,
+      };
+    });
+    const poll = (d.poll && d.poll.question) || d.pollQuestion ? {
+      question: String(d.poll?.question || d.pollQuestion || ""),
+      options: pollOptions,
+    } : undefined;
+
+    return {
+      id: d.id,
+      me: isFromMe,
+      senderName: String(d.senderName || user.name),
+      dateGroup: String(d.dateGroup || "Today"),
+      kind: d.kind || "text",
+      text: d.text ? String(d.text) : undefined,
+      audio: d.audio || d.audioUrl,
+      audioDuration: d.audioDuration,
+      attachment: d.attachment,
+      poll,
+      pollOptionsRaw: rawPollOpts,
+      pollVotesRaw: d.pollVotesRaw || Object.keys(voteMap),
+      pollVotesUserMap: voteMap,
+      reactionsRaw: d.reactionsRaw || Object.keys(userMap),
+      reactionsUserMap: userMap,
+      time: String(d.time || ""),
+      edited: Boolean(d.edited),
+      replyToId: d.replyToId ? String(d.replyToId) : undefined,
+      forwardedFrom: d.forwardedFrom ? String(d.forwardedFrom) : undefined,
+      reactions: reactionsMap,
+      status: "read",
+      createdAtMs: typeof d.createdAtMs === "number" ? d.createdAtMs : Date.now(),
+    };
+  }, [user]);
+
   const [directoryUsersCache, setDirectoryUsersCache] = useState<
     Record<string, { displayName: string; handle: string }>
   >({});
@@ -908,10 +970,83 @@ function Messages() {
     };
     refreshShared();
 
-    // Listen to realtime events for immediate cross-tab conversation upsert
+    // Listen to realtime events for immediate cross-tab and cross-device synchronization
     const unsubRealtime = subscribeToRealtimeEvents((event) => {
       if (event.type === "CONVERSATION_UPSERTED" || event.type === "FRIEND_REQUEST_UPDATED") {
         refreshShared();
+      } else if (event.type === "MESSAGE_SENT" || (event as any).type === "MESSAGE_UPDATED") {
+        const rawMsg = event.message;
+        if (!rawMsg) return;
+        const convId = event.convId;
+        const nextMsg = mapRawToMsg(rawMsg);
+
+        // 1. Update message list in state and local storage
+        setMessagesByChat((prev) => {
+          const list = prev[convId] ?? readSharedMessages(convId).map(mapRawToMsg);
+          const idx = list.findIndex((m) => m.id === nextMsg.id);
+          let updatedList: Msg[];
+          if (idx >= 0) {
+            updatedList = [...list];
+            updatedList[idx] = { ...updatedList[idx], ...nextMsg };
+          } else {
+            updatedList = [...list, nextMsg];
+          }
+          const nextMsgs = { ...prev, [convId]: updatedList };
+          saveLocalMessages(user.uid, nextMsgs);
+          return nextMsgs;
+        });
+
+        // 2. Update contacts list with preview, time, and unread count
+        const preview =
+          nextMsg.kind === "voice"
+            ? "Voice message"
+            : nextMsg.kind === "poll"
+              ? `Poll: ${nextMsg.poll?.question || ""}`
+              : nextMsg.kind === "attachment"
+                ? `Attachment: ${nextMsg.attachment?.name || ""}`
+                : nextMsg.text || "";
+
+        setContacts((prev) => {
+          const cIdx = prev.findIndex((c) => c.id === convId);
+          let nextContacts: Contact[];
+          if (cIdx >= 0) {
+            const existing = prev[cIdx]!;
+            const isCurrentlyViewing = activeIdRef.current === convId;
+            const updated: Contact = {
+              ...existing,
+              lastMessageText: preview,
+              lastMessageTime: nextMsg.time || "",
+              updatedAtMs: Date.now(),
+              unread: (isCurrentlyViewing || nextMsg.me) ? 0 : (existing.unread ?? 0) + 1,
+            };
+            nextContacts = [updated, ...prev.filter((_, i) => i !== cIdx)];
+          } else {
+            const newContact: Contact = {
+              id: convId,
+              name: nextMsg.senderName || "Friend",
+              handle: `@${(nextMsg.senderLumenId || "user").toLowerCase()}`,
+              role: `Direct · ${nextMsg.senderLumenId || ""}`,
+              online: true,
+              isGroup: false,
+              memberCount: 2,
+              pinned: false,
+              unread: nextMsg.me ? 0 : 1,
+              lastMessageText: preview,
+              lastMessageTime: nextMsg.time || "",
+              updatedAtMs: Date.now(),
+              peerLumenId: nextMsg.senderLumenId,
+              peerUserId: nextMsg.senderUid,
+            };
+            nextContacts = [newContact, ...prev];
+          }
+          saveLocalContacts(user.uid, nextContacts);
+          return nextContacts;
+        });
+
+        // 3. Play chime for incoming messages from peer
+        if (!nextMsg.me) {
+          playNotificationChime();
+        }
       }
     });
 
@@ -1384,36 +1519,59 @@ function Messages() {
     if (!active || active.isGroup || !user) {
       return { locked: false, isIncoming: false, pendingReq: null as FriendRequestItem | null };
     }
-    const peerLumenId = normalizeLumenId(active.peerLumenId || "");
-    const peerUid = active.peerUserId;
+    const myLumenNorm = normalizeLumenId(user.lumenId || "").toLowerCase();
+    const myUidClean = sanitizeId(user.uid).toLowerCase();
+    const peerLumenId = normalizeLumenId(active.peerLumenId || "").toLowerCase();
+    const peerUid = sanitizeId(active.peerUserId || "").toLowerCase();
 
     // Check if there is an accepted friend request
-    const accepted = friendRequests.some(
-      (r) =>
-        r.status === "accepted" &&
-        (((r.fromUid === user.uid || normalizeLumenId(r.fromLumenId) === user.lumenId) &&
-          (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
-         ((r.toUid === user.uid || normalizeLumenId(r.toLumenId) === user.lumenId) &&
-          (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
-    );
+    const accepted = friendRequests.some((r) => {
+      if (r.status !== "accepted") return false;
+      const fromLumen = normalizeLumenId(r.fromLumenId || "").toLowerCase();
+      const toLumen = normalizeLumenId(r.toLumenId || "").toLowerCase();
+      const fromUid = sanitizeId(r.fromUid || "").toLowerCase();
+      const toUid = sanitizeId(r.toUid || "").toLowerCase();
+
+      const isSenderMe = fromUid === myUidClean || (Boolean(myLumenNorm) && fromLumen === myLumenNorm);
+      const isReceiverMe = toUid === myUidClean || (Boolean(myLumenNorm) && toLumen === myLumenNorm);
+      const isSenderPeer = fromUid === peerUid || (Boolean(peerLumenId) && fromLumen === peerLumenId);
+      const isReceiverPeer = toUid === peerUid || (Boolean(peerLumenId) && toLumen === peerLumenId);
+
+      return (isSenderMe && isReceiverPeer) || (isReceiverMe && isSenderPeer);
+    });
     if (accepted) return { locked: false, isIncoming: false, pendingReq: null };
 
+    // If active conversation already has messages, it is active - never lock
+    const existingMsgs = messagesByChat[active.id] ?? [];
+    if (existingMsgs.length > 0) {
+      return { locked: false, isIncoming: false, pendingReq: null };
+    }
+
     // Check if there is a pending request
-    const pendingReq = friendRequests.find(
-      (r) =>
-        r.status === "pending" &&
-        ((r.fromUid === user.uid && (normalizeLumenId(r.toLumenId) === peerLumenId || (peerUid && r.toUid === peerUid))) ||
-         ((r.toUid === user.uid || normalizeLumenId(r.toLumenId) === user.lumenId) &&
-          (normalizeLumenId(r.fromLumenId) === peerLumenId || (peerUid && r.fromUid === peerUid)))),
-    );
+    const pendingReq = friendRequests.find((r) => {
+      if (r.status !== "pending") return false;
+      const fromLumen = normalizeLumenId(r.fromLumenId || "").toLowerCase();
+      const toLumen = normalizeLumenId(r.toLumenId || "").toLowerCase();
+      const fromUid = sanitizeId(r.fromUid || "").toLowerCase();
+      const toUid = sanitizeId(r.toUid || "").toLowerCase();
+
+      const isSenderMe = fromUid === myUidClean || (Boolean(myLumenNorm) && fromLumen === myLumenNorm);
+      const isReceiverMe = toUid === myUidClean || (Boolean(myLumenNorm) && toLumen === myLumenNorm);
+      const isSenderPeer = fromUid === peerUid || (Boolean(peerLumenId) && fromLumen === peerLumenId);
+      const isReceiverPeer = toUid === peerUid || (Boolean(peerLumenId) && toLumen === peerLumenId);
+
+      return (isSenderMe && isReceiverPeer) || (isReceiverMe && isSenderPeer);
+    });
 
     if (pendingReq) {
-      const isIncoming = pendingReq.toUid === user.uid || normalizeLumenId(pendingReq.toLumenId) === user.lumenId;
-      return { locked: true, isIncoming, pendingReq };
+      const isIncoming =
+        sanitizeId(pendingReq.toUid || "").toLowerCase() === myUidClean ||
+        (Boolean(myLumenNorm) && normalizeLumenId(pendingReq.toLumenId || "").toLowerCase() === myLumenNorm);
+      return { locked: isIncoming, isIncoming, pendingReq };
     }
 
     return { locked: false, isIncoming: false, pendingReq: null };
-  }, [active, user, friendRequests]);
+  }, [active, user, friendRequests, messagesByChat]);
 
   const publishTypingStatus = (conv: Contact | undefined, isTyping: boolean) => {
     if (!user || !conv) return;
@@ -1509,7 +1667,7 @@ function Messages() {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
       setReactionPopupMsgId(msgId);
-    }, 2000);
+    }, 180);
   };
 
   const handleMsgMouseLeave = (msgId: string) => {
@@ -1658,11 +1816,22 @@ function Messages() {
     };
 
     // 1. Immediately save and broadcast to shared store for live cross-tab/local replication
-    saveSharedMessage(convId, {
-      ...localMsg,
-      senderUid: user.uid,
-      senderLumenId: user.lumenId,
-    });
+    saveSharedMessage(
+      convId,
+      {
+        ...localMsg,
+        senderUid: user.uid,
+        senderLumenId: user.lumenId,
+      },
+      {
+        peerLumenId: active?.peerLumenId,
+        peerUid: active?.peerUserId,
+        participantLumenIds: active?.participantLumenIds,
+        participantIds: active?.participantIds,
+        conversationName: active?.name,
+        previewText: preview,
+      },
+    );
 
     const existingList = messagesByChat[convId] ?? [];
     setMessagesByChat((prev) => ({ ...prev, [convId]: [...existingList, localMsg] }));
@@ -2707,7 +2876,18 @@ function Messages() {
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
+      const mimeType =
+        typeof MediaRecorder.isTypeSupported === "function" &&
+        MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+          ? "audio/webm;codecs=opus"
+          : typeof MediaRecorder.isTypeSupported === "function" &&
+              MediaRecorder.isTypeSupported("audio/webm")
+            ? "audio/webm"
+            : typeof MediaRecorder.isTypeSupported === "function" &&
+                MediaRecorder.isTypeSupported("audio/mp4")
+              ? "audio/mp4"
+              : "";
+      const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       const chunks: Blob[] = [];
       const startedAt = Date.now();
       rec.ondataavailable = (e) => chunks.push(e.data);
@@ -3953,10 +4133,32 @@ function Messages() {
                           {showContextMenu && (
                             <div
                               onClick={(e) => e.stopPropagation()}
-                              className={`glass absolute top-full z-40 mt-1.5 flex w-44 flex-col gap-0.5 rounded-2xl p-1.5 text-xs shadow-2xl ${
+                              className={`glass absolute top-full z-40 mt-1.5 flex w-48 flex-col gap-0.5 rounded-2xl p-1.5 text-xs shadow-2xl ${
                                 m.me ? "right-0" : "left-0"
                               }`}
                             >
+                              {/* Quick Reaction Emojis in Context Menu */}
+                              <div className="flex items-center justify-between border-b border-glass-edge px-1.5 py-1 mb-1">
+                                {PRIMARY_REACTIONS.map((r) => {
+                                  const isSelected = Boolean(m.reactions?.[r.emoji]?.me);
+                                  return (
+                                    <button
+                                      key={r.emoji}
+                                      type="button"
+                                      onClick={() => {
+                                        toggleReaction(m.id, r.emoji, true);
+                                        setContextMenuMsgId(null);
+                                      }}
+                                      className={`flex h-7 w-7 items-center justify-center rounded-full text-sm transition-transform hover:scale-125 ${
+                                        isSelected ? "bg-glass-strong ring-1 ring-foreground/25" : ""
+                                      }`}
+                                      title={r.label}
+                                    >
+                                      {r.emoji}
+                                    </button>
+                                  );
+                                })}
+                              </div>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -4656,10 +4858,30 @@ function LiveWebRTCCallModal({
   const [callStatus, setCallStatus] = useState<CallStatus>(
     session.isCaller ? "ringing" : "connected",
   );
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [hasRemoteStream, setHasRemoteStream] = useState<boolean>(false);
   const [micMuted, setMicMuted] = useState<boolean>(false);
   const [camOff, setCamOff] = useState<boolean>(false);
   const [durationSec, setDurationSec] = useState<number>(0);
+
+  // Sync media streams to video/audio DOM elements reliably
+  useEffect(() => {
+    if (localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  useEffect(() => {
+    if (remoteStream) {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+      }
+      if (remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+      }
+    }
+  }, [remoteStream]);
 
   // Call duration counter
   useEffect(() => {
@@ -4689,12 +4911,8 @@ function LiveWebRTCCallModal({
             kind: session.kind,
             onRemoteStream: (stream) => {
               if (!isMounted) return;
+              setRemoteStream(stream);
               setHasRemoteStream(true);
-              if (session.kind === "video" && remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = stream;
-              } else if (remoteAudioRef.current) {
-                remoteAudioRef.current.srcObject = stream;
-              }
             },
             onStatusChange: (status) => {
               if (!isMounted) return;
@@ -4715,12 +4933,8 @@ function LiveWebRTCCallModal({
             kind: session.kind,
             onRemoteStream: (stream) => {
               if (!isMounted) return;
+              setRemoteStream(stream);
               setHasRemoteStream(true);
-              if (session.kind === "video" && remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = stream;
-              } else if (remoteAudioRef.current) {
-                remoteAudioRef.current.srcObject = stream;
-              }
             },
             onStatusChange: (status) => {
               if (!isMounted) return;
@@ -4739,8 +4953,8 @@ function LiveWebRTCCallModal({
         }
 
         controlsRef.current = controls;
-        if (controls?.localStream && localVideoRef.current) {
-          localVideoRef.current.srcObject = controls.localStream;
+        if (controls?.localStream) {
+          setLocalStream(controls.localStream);
         }
       } catch (err: unknown) {
         if (!isMounted) return;
@@ -4820,14 +5034,13 @@ function LiveWebRTCCallModal({
           {session.kind === "video" ? (
             <>
               {/* Remote Video Stream */}
-              {hasRemoteStream ? (
-                <video
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                className={`absolute inset-0 h-full w-full object-cover ${hasRemoteStream ? "" : "hidden"}`}
+              />
+              {!hasRemoteStream && (
                 <div className="flex flex-col items-center gap-3">
                   <div className="relative flex h-20 w-20 items-center justify-center">
                     <span className="absolute h-24 w-24 animate-ping rounded-full bg-chart-2/20" />

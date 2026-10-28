@@ -278,6 +278,51 @@ function handleIncomingRelayEvent(ev: RealtimeEvent) {
         JSON.stringify(next),
       );
     } catch {}
+
+    // Update or create shared conversation for this message
+    try {
+      const preview =
+        ev.message.kind === "voice"
+          ? "Voice message"
+          : ev.message.kind === "poll"
+            ? `Poll: ${ev.message.poll?.question || ""}`
+            : ev.message.kind === "attachment"
+              ? `Attachment: ${ev.message.attachment?.name || ""}`
+              : ev.message.text || "";
+
+      const allConvs = readAllSharedConversations();
+      const cIdx = allConvs.findIndex((c) => c.id === ev.convId);
+      if (cIdx >= 0) {
+        allConvs[cIdx] = {
+          ...allConvs[cIdx],
+          lastMessageText: preview,
+          lastMessageTime: ev.message.time || "",
+          updatedAtMs: Date.now(),
+        };
+        writeAllSharedConversations(allConvs);
+      } else if (ev.message.senderLumenId || ev.message.senderUid) {
+        const senderName = ev.message.senderName || `User ${ev.message.senderLumenId || "Peer"}`;
+        const newConv: RealtimeConversation = {
+          id: ev.convId,
+          ownerId: ev.message.senderUid || "",
+          participantIds: [ev.message.senderUid || ""],
+          participantLumenIds: [ev.message.senderLumenId || ""],
+          peerUserId: ev.message.senderUid || "",
+          peerLumenId: ev.message.senderLumenId || "",
+          name: senderName,
+          handle: `@${(ev.message.senderLumenId || "user").toLowerCase()}`,
+          role: `Direct · ${ev.message.senderLumenId || ""}`,
+          isGroup: false,
+          memberCount: 2,
+          pinned: false,
+          unread: 1,
+          lastMessageText: preview,
+          lastMessageTime: ev.message.time || "",
+          updatedAtMs: Date.now(),
+        };
+        writeAllSharedConversations([newConv, ...allConvs]);
+      }
+    } catch {}
   }
 
   notifyListeners(ev);
@@ -727,7 +772,18 @@ export function readSharedMessages(convId: string): any[] {
   }
 }
 
-export function saveSharedMessage(convId: string, message: any): void {
+export function saveSharedMessage(
+  convId: string,
+  message: any,
+  meta?: {
+    peerLumenId?: string;
+    peerUid?: string;
+    participantLumenIds?: string[];
+    participantIds?: string[];
+    conversationName?: string;
+    previewText?: string;
+  },
+): void {
   if (typeof window === "undefined" || !convId || !message) return;
   const existing = readSharedMessages(convId);
   const exists = existing.some((m) => m.id === message.id);
@@ -741,15 +797,92 @@ export function saveSharedMessage(convId: string, message: any): void {
     window.localStorage.setItem(`${SHARED_MESSAGES_KEY_PREFIX}${convId}`, JSON.stringify(next));
   } catch {}
 
+  // Update shared conversation preview
+  try {
+    const preview =
+      meta?.previewText ||
+      (message.kind === "voice"
+        ? "Voice message"
+        : message.kind === "poll"
+          ? `Poll: ${message.poll?.question || ""}`
+          : message.kind === "attachment"
+            ? `Attachment: ${message.attachment?.name || ""}`
+            : message.text || "");
+
+    const allConvs = readAllSharedConversations();
+    const cIdx = allConvs.findIndex((c) => c.id === convId);
+    if (cIdx >= 0) {
+      allConvs[cIdx] = {
+        ...allConvs[cIdx],
+        lastMessageText: preview,
+        lastMessageTime: message.time || "",
+        updatedAtMs: Date.now(),
+      };
+      writeAllSharedConversations(allConvs);
+    }
+  } catch {}
+
   broadcastRealtimeEvent({ type: "MESSAGE_SENT", convId, message });
 
-  // Relay message to conversation topic
+  // 1. Relay message to conversation room topic
   const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
   void publishToCloudRelay(`xperter_conv_${cleanConv}`, {
     type: "MESSAGE_SENT",
     convId,
     message,
   });
+
+  // 2. Relay message to recipient(s) private inbox topics so devices receive live alerts even if chat is not open
+  const recipientLumenTopics = new Set<string>();
+  const recipientUids = new Set<string>();
+
+  if (meta?.peerLumenId) recipientLumenTopics.add(meta.peerLumenId);
+  if (meta?.peerUid) recipientUids.add(meta.peerUid);
+  if (Array.isArray(meta?.participantLumenIds)) {
+    for (const p of meta.participantLumenIds) {
+      if (p && p !== message.senderLumenId) recipientLumenTopics.add(p);
+    }
+  }
+  if (Array.isArray(meta?.participantIds)) {
+    for (const p of meta.participantIds) {
+      if (p && p !== message.senderUid) recipientUids.add(p);
+    }
+  }
+
+  // Also check if conversation exists in shared store to find participants
+  try {
+    const allConvs = readAllSharedConversations();
+    const conv = allConvs.find((c) => c.id === convId);
+    if (conv) {
+      for (const p of conv.participantLumenIds || []) {
+        if (p && p !== message.senderLumenId) recipientLumenTopics.add(p);
+      }
+      for (const p of conv.participantIds || []) {
+        if (p && p !== message.senderUid) recipientUids.add(p);
+      }
+    }
+  } catch {}
+
+  for (const lumen of recipientLumenTopics) {
+    const norm = normalizeLumenId(lumen).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (norm) {
+      void publishToCloudRelay(`xperter_inbox_${norm}`, {
+        type: "MESSAGE_SENT",
+        convId,
+        message,
+      });
+    }
+  }
+  for (const uid of recipientUids) {
+    const cleanUid = sanitizeId(uid).toLowerCase();
+    if (cleanUid) {
+      void publishToCloudRelay(`xperter_inbox_${cleanUid}`, {
+        type: "MESSAGE_SENT",
+        convId,
+        message,
+      });
+    }
+  }
 }
 
 export function readAllSharedDirectoryUsers(): RealtimeDirectoryUser[] {
