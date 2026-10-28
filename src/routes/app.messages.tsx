@@ -4869,6 +4869,7 @@ function LiveWebRTCCallModal({
   useEffect(() => {
     if (localStream && localVideoRef.current) {
       localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch(() => {});
     }
   }, [localStream]);
 
@@ -4876,9 +4877,11 @@ function LiveWebRTCCallModal({
     if (remoteStream) {
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play().catch(() => {});
       }
       if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.play().catch(() => {});
       }
     }
   }, [remoteStream]);
@@ -5026,9 +5029,7 @@ function LiveWebRTCCallModal({
           {session.kind === "video" ? "Video Call" : "Voice Call"} · {statusLabel}
         </DialogDescription>
 
-        {session.kind === "audio" && (
-          <audio ref={remoteAudioRef} autoPlay />
-        )}
+        <audio ref={remoteAudioRef} autoPlay playsInline />
 
         <div className="bg-pearl relative mt-3 flex aspect-video w-full items-center justify-center overflow-hidden rounded-3xl border border-glass-edge shadow-inner">
           {session.kind === "video" ? (

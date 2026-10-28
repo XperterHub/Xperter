@@ -46,6 +46,9 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
+    { urls: "stun:stun4.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
   ],
 };
 
@@ -118,14 +121,27 @@ export function listenForIncomingCalls(
     if (!sig) return;
 
     if (sig.type === "offer" && sig.status === "ringing") {
+      const callerUidClean = sanitizeId(sig.callerUid || "").toLowerCase();
+      const callerLumenNorm = normalizeLumenId(sig.callerLumenId || "").toLowerCase();
+
+      // Ignore our own outgoing call signals
+      const isCallerMe =
+        (Boolean(cleanMyUid) && callerUidClean === cleanMyUid) ||
+        (Boolean(normMyLumen) && callerLumenNorm === normMyLumen);
+      if (isCallerMe) return;
+
       const targetUid = sanitizeId(sig.calleeUid || "").toLowerCase();
       const targetLumen = normalizeLumenId(sig.calleeLumenId || "").toLowerCase();
+
+      // Check if call is targeted to this user or conversation includes this user
       const isTarget =
-        (cleanMyUid && (targetUid === cleanMyUid || targetUid === `usr_${normMyLumen}`)) ||
-        (normMyLumen && targetLumen === normMyLumen);
+        (!targetUid && !targetLumen) ||
+        (Boolean(cleanMyUid) && (targetUid === cleanMyUid || targetUid.includes(cleanMyUid) || cleanMyUid.includes(targetUid))) ||
+        (Boolean(normMyLumen) && (targetLumen === normMyLumen || targetLumen.includes(normMyLumen) || normMyLumen.includes(targetLumen))) ||
+        (Boolean(normMyLumen) && Boolean(sig.convId) && sig.convId.toLowerCase().includes(normMyLumen));
 
       if (isTarget) {
-        if (Date.now() - (sig.createdAtMs || 0) < 45000) {
+        if (Date.now() - (sig.createdAtMs || 0) < 60000) {
           ringtone.startRinging();
           onIncoming({
             id: sig.convId,
@@ -229,6 +245,51 @@ export async function startWebRTCCall(params: {
   const callerCandidatesRef = collection(db, "calls", convId, "callerCandidates");
   const calleeCandidatesRef = collection(db, "calls", convId, "calleeCandidates");
 
+  const pendingCandidates: RTCIceCandidateInit[] = [];
+  let remoteDescReady = false;
+
+  const addRemoteCandidate = async (candidate: RTCIceCandidateInit) => {
+    if (remoteDescReady && pc.remoteDescription) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn("Failed to add remote ICE candidate:", err);
+      }
+    } else {
+      pendingCandidates.push(candidate);
+    }
+  };
+
+  const flushCandidates = async () => {
+    remoteDescReady = true;
+    while (pendingCandidates.length > 0) {
+      const c = pendingCandidates.shift();
+      if (c) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+        } catch (err) {
+          console.warn("Failed to flush pending ICE candidate:", err);
+        }
+      }
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") {
+      ringtone.stop();
+      onStatusChange("connected");
+    } else if (pc.connectionState === "closed" || pc.connectionState === "failed") {
+      onStatusChange("ended");
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+      ringtone.stop();
+      onStatusChange("connected");
+    }
+  };
+
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       const candJson = event.candidate.toJSON();
@@ -270,6 +331,8 @@ export async function startWebRTCCall(params: {
   if (callee.uid) {
     const cleanUid = sanitizeId(callee.uid).toLowerCase();
     if (cleanUid) calleeTopics.add(`xperter_inbox_${cleanUid}`);
+    const strippedUid = cleanUid.replace(/^dir_|^usr_/, "");
+    if (strippedUid) calleeTopics.add(`xperter_inbox_${strippedUid}`);
   }
   for (const t of calleeTopics) {
     void publishToCloudRelay(t, { type: "CALL_SIGNAL", convId, signal: signalOffer });
@@ -295,11 +358,12 @@ export async function startWebRTCCall(params: {
       try {
         const answerDesc = new RTCSessionDescription(sig.answer as RTCSessionDescriptionInit);
         await pc.setRemoteDescription(answerDesc);
-      } catch {}
+        await flushCandidates();
+      } catch (err) {
+        console.warn("Failed to set remote description:", err);
+      }
     } else if (sig.type === "candidate" && sig.role === "callee" && sig.candidate) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
-      } catch {}
+      await addRemoteCandidate(sig.candidate);
     } else if (sig.type === "declined" || sig.type === "ended") {
       ringtone.stop();
       onStatusChange(sig.type);
@@ -425,6 +489,49 @@ export async function answerWebRTCCall(params: {
   const calleeCandidatesRef = collection(db, "calls", callId, "calleeCandidates");
   const callerCandidatesRef = collection(db, "calls", callId, "callerCandidates");
 
+  const pendingCandidates: RTCIceCandidateInit[] = [];
+  let remoteDescReady = false;
+
+  const addRemoteCandidate = async (candidate: RTCIceCandidateInit) => {
+    if (remoteDescReady && pc.remoteDescription) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (err) {
+        console.warn("Failed to add remote ICE candidate:", err);
+      }
+    } else {
+      pendingCandidates.push(candidate);
+    }
+  };
+
+  const flushCandidates = async () => {
+    remoteDescReady = true;
+    while (pendingCandidates.length > 0) {
+      const c = pendingCandidates.shift();
+      if (c) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(c));
+        } catch (err) {
+          console.warn("Failed to flush pending ICE candidate:", err);
+        }
+      }
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") {
+      onStatusChange("connected");
+    } else if (pc.connectionState === "closed" || pc.connectionState === "failed") {
+      onStatusChange("ended");
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+      onStatusChange("connected");
+    }
+  };
+
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       const candJson = event.candidate.toJSON();
@@ -439,6 +546,7 @@ export async function answerWebRTCCall(params: {
 
   const offerDesc = new RTCSessionDescription(offer as RTCSessionDescriptionInit);
   await pc.setRemoteDescription(offerDesc);
+  await flushCandidates();
 
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
@@ -470,9 +578,7 @@ export async function answerWebRTCCall(params: {
     if (!sig) return;
 
     if (sig.type === "candidate" && sig.role === "caller" && sig.candidate) {
-      try {
-        await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
-      } catch {}
+      await addRemoteCandidate(sig.candidate);
     } else if (sig.type === "ended") {
       onStatusChange("ended");
       cleanup();
