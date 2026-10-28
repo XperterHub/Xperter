@@ -132,6 +132,8 @@ type Msg = {
   replyToId?: string | undefined;
   forwardedFrom?: string | undefined;
   reactions?: Record<string, { count: number; me: boolean }>;
+  reactionsUserMap?: Record<string, string[]>;
+  pollVotesUserMap?: Record<string, string[]>;
   status?: "sent" | "read";
   createdAtMs: number;
 };
@@ -707,10 +709,10 @@ function Messages() {
 
   // Listen in real time for incoming WebRTC calls directed to current user
   useEffect(() => {
-    if (!authReady || !user || !user.isCloudUser) return;
+    if (!authReady || !user) return;
     const unsub = listenForIncomingCalls(user.uid, (callDoc) => {
       setIncomingCall(callDoc);
-    });
+    }, user.lumenId);
     return () => {
       unsub();
       ringtone.stop();
@@ -1189,12 +1191,40 @@ function Messages() {
   useEffect(() => {
     if (!authReady || !user || !activeId) return;
 
-    // Load initial messages from shared storage
-    const rawShared = readSharedMessages(activeId);
-    if (rawShared.length > 0) {
-      const mappedShared: Msg[] = rawShared.map((d: any) => ({
+    const mapRawToMsg = (d: any): Msg => {
+      const isFromMe = String(d.senderUid || d.ownerId || "") === user.uid || String(d.senderLumenId || "") === user.lumenId;
+      const userMap = (d.reactionsUserMap || {}) as Record<string, string[]>;
+      const reactionsMap: Record<string, { count: number; me: boolean }> = {};
+      for (const [emoji, users] of Object.entries(userMap)) {
+        if (Array.isArray(users) && users.length > 0) {
+          const hasMe = users.includes(user.uid) || (Boolean(user.lumenId) && users.includes(user.lumenId));
+          reactionsMap[emoji] = { count: users.length, me: hasMe };
+        }
+      }
+      if (Object.keys(reactionsMap).length === 0 && d.reactions) {
+        Object.assign(reactionsMap, d.reactions);
+      }
+
+      const voteMap = (d.pollVotesUserMap || {}) as Record<string, string[]>;
+      const rawPollOpts = (d.pollOptionsRaw || d.pollOptions || (d.poll?.options?.map((o: any) => o.label)) || []) as string[];
+      const pollOptions = rawPollOpts.map((label: string, idx: number) => {
+        const voters = voteMap[label] || [];
+        const votedByMe = voters.includes(user.uid) || (Boolean(user.lumenId) && voters.includes(user.lumenId));
+        return {
+          id: `opt-${idx}`,
+          label,
+          votes: voters.length,
+          votedByMe,
+        };
+      });
+      const poll = (d.poll && d.poll.question) || d.pollQuestion ? {
+        question: String(d.poll?.question || d.pollQuestion || ""),
+        options: pollOptions,
+      } : undefined;
+
+      return {
         id: d.id,
-        me: String(d.senderUid || d.ownerId || "") === user.uid || String(d.senderLumenId || "") === user.lumenId,
+        me: isFromMe,
         senderName: String(d.senderName || user.name),
         dateGroup: String(d.dateGroup || "Today"),
         kind: d.kind || "text",
@@ -1202,56 +1232,46 @@ function Messages() {
         audio: d.audio || d.audioUrl,
         audioDuration: d.audioDuration,
         attachment: d.attachment,
-        poll: d.poll,
-        pollOptionsRaw: d.pollOptionsRaw || [],
-        pollVotesRaw: d.pollVotesRaw || [],
-        reactionsRaw: d.reactionsRaw || [],
+        poll,
+        pollOptionsRaw: rawPollOpts,
+        pollVotesRaw: d.pollVotesRaw || Object.keys(voteMap),
+        pollVotesUserMap: voteMap,
+        reactionsRaw: d.reactionsRaw || Object.keys(userMap),
+        reactionsUserMap: userMap,
         time: String(d.time || ""),
         edited: Boolean(d.edited),
         replyToId: d.replyToId ? String(d.replyToId) : undefined,
         forwardedFrom: d.forwardedFrom ? String(d.forwardedFrom) : undefined,
-        reactions: d.reactions || {},
+        reactions: reactionsMap,
         status: "read",
         createdAtMs: typeof d.createdAtMs === "number" ? d.createdAtMs : Date.now(),
-      }));
+      };
+    };
+
+    // Load initial messages from shared storage
+    const rawShared = readSharedMessages(activeId);
+    if (rawShared.length > 0) {
+      const mappedShared: Msg[] = rawShared.map(mapRawToMsg);
       setMessagesByChat((prev) => ({ ...prev, [activeId]: mappedShared }));
     }
 
     // Subscribe to realtime broadcast events for live message replication
     const unsubBroadcast = subscribeToRealtimeEvents((event) => {
-      if (event.type === "MESSAGE_SENT" && event.convId === activeId) {
-        const d = event.message;
-        const isFromMe = String(d.senderUid || d.ownerId || "") === user.uid || String(d.senderLumenId || "") === user.lumenId;
-        const nextMsg: Msg = {
-          id: d.id,
-          me: isFromMe,
-          senderName: String(d.senderName || user.name),
-          dateGroup: String(d.dateGroup || "Today"),
-          kind: d.kind || "text",
-          text: d.text ? String(d.text) : undefined,
-          audio: d.audio || d.audioUrl,
-          audioDuration: d.audioDuration,
-          attachment: d.attachment,
-          poll: d.poll,
-          pollOptionsRaw: d.pollOptionsRaw || [],
-          pollVotesRaw: d.pollVotesRaw || [],
-          reactionsRaw: d.reactionsRaw || [],
-          time: String(d.time || ""),
-          edited: Boolean(d.edited),
-          replyToId: d.replyToId ? String(d.replyToId) : undefined,
-          forwardedFrom: d.forwardedFrom ? String(d.forwardedFrom) : undefined,
-          reactions: d.reactions || {},
-          status: "read",
-          createdAtMs: typeof d.createdAtMs === "number" ? d.createdAtMs : Date.now(),
-        };
+      if ((event.type === "MESSAGE_SENT" || (event as any).type === "MESSAGE_UPDATED") && event.convId === activeId) {
+        const nextMsg = mapRawToMsg(event.message);
 
         setMessagesByChat((prev) => {
           const currentList = prev[activeId] ?? [];
-          if (currentList.some((m) => m.id === nextMsg.id)) return prev;
+          const idx = currentList.findIndex((m) => m.id === nextMsg.id);
+          if (idx >= 0) {
+            const updated = [...currentList];
+            updated[idx] = { ...updated[idx], ...nextMsg };
+            return { ...prev, [activeId]: updated };
+          }
           return { ...prev, [activeId]: [...currentList, nextMsg] };
         });
 
-        if (!isFromMe) {
+        if (!nextMsg.me) {
           playNotificationChime();
         }
       }
@@ -1780,24 +1800,70 @@ function Messages() {
     setContextMenuMsgId(null);
   };
 
+  const compressImageFile = async (file: File, maxWidth = 1280, quality = 0.8): Promise<{ dataUrl: string; sizeStr: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            const rawUrl = e.target?.result as string;
+            resolve({ dataUrl: rawUrl, sizeStr: `${Math.round(file.size / 1024)} KB` });
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          const approxBytes = Math.round((dataUrl.length * 3) / 4);
+          const sizeStr = approxBytes > 1024 * 1024
+            ? `${(approxBytes / (1024 * 1024)).toFixed(1)} MB`
+            : `${Math.max(1, Math.round(approxBytes / 1024))} KB`;
+          resolve({ dataUrl, sizeStr });
+        };
+        img.src = e.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !active || !user) return;
     e.target.value = "";
 
-    if (file.size > 350 * 1024) {
-      toast.error("Please choose a file under 350 KB");
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Please choose a file under 5 MB");
       return;
     }
 
     const isImage = file.type.startsWith("image/");
-    const size =
-      file.size > 1024 * 1024
-        ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
-        : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+    let dataUrl: string;
+    let size: string;
 
     try {
-      const dataUrl = await readBlobAsDataUrl(file);
+      if (isImage) {
+        const compressed = await compressImageFile(file);
+        dataUrl = compressed.dataUrl;
+        size = compressed.sizeStr;
+      } else {
+        dataUrl = await readBlobAsDataUrl(file);
+        size =
+          file.size > 1024 * 1024
+            ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+            : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+      }
+
       const currentText = text.trim();
       const currentReplyId = replyTo?.id;
       setText("");
@@ -1815,6 +1881,7 @@ function Messages() {
           isImage,
         },
       });
+      toast.success(isImage ? "Photo sent" : "File sent");
     } catch {
       toast.error("Could not attach file");
     }
@@ -2393,42 +2460,73 @@ function Messages() {
 
   const votePoll = async (msg: Msg, optionLabel: string) => {
     if (!active || !user) return;
-    const hasVoted = msg.pollVotesRaw.includes(optionLabel);
-    const nextVotes = hasVoted
-      ? msg.pollVotesRaw.filter((l) => l !== optionLabel)
-      : [...msg.pollVotesRaw, optionLabel].slice(0, BLUEPRINT_LIMITS.MAX_POLL_OPTIONS);
+    const myId = user.lumenId || user.uid;
+    const currentVoteMap: Record<string, string[]> = { ...(msg.pollVotesUserMap || {}) };
 
-    if (!isCloud) {
-      const updatedList = activeMsgs.map((m) => {
-        if (m.id !== msg.id) return m;
-        const poll: PollData | undefined = m.poll
-          ? {
-              question: m.poll.question,
-              options: m.pollOptionsRaw.map((label, idx) => {
-                const votedByMe = nextVotes.includes(label);
-                return {
-                  id: `opt-${idx}`,
-                  label,
-                  votes: votedByMe ? 1 : 0,
-                  votedByMe,
-                };
-              }),
-            }
-          : undefined;
-        return { ...m, pollVotesRaw: nextVotes, poll };
-      });
-      saveLocalMessages(user.uid, { ...messagesByChat, [active.id]: updatedList });
-      return;
+    const currentVotersForOption = currentVoteMap[optionLabel] || [];
+    const hasVotedThis =
+      currentVotersForOption.includes(myId) ||
+      currentVotersForOption.includes(user.uid) ||
+      (Boolean(user.lumenId) && currentVotersForOption.includes(user.lumenId));
+
+    const nextVoteMap: Record<string, string[]> = {};
+    for (const [opt, voters] of Object.entries(currentVoteMap)) {
+      nextVoteMap[opt] = voters.filter((id) => id !== user.uid && id !== user.lumenId && id !== myId);
+    }
+    if (!hasVotedThis) {
+      nextVoteMap[optionLabel] = [...(nextVoteMap[optionLabel] || []), myId];
     }
 
-    const msgPath = `conversations/${active.id}/messages/${msg.id}`;
-    try {
-      await updateDoc(doc(db, "conversations", active.id, "messages", msg.id), {
-        pollVotes: nextVotes,
+    const nextPollVotesRaw = Object.keys(nextVoteMap).filter((opt) => (nextVoteMap[opt] || []).length > 0);
+
+    const pollOptions = (msg.pollOptionsRaw || []).map((label, idx) => {
+      const voters = nextVoteMap[label] || [];
+      const votedByMe =
+        voters.includes(user.uid) ||
+        (Boolean(user.lumenId) && voters.includes(user.lumenId)) ||
+        voters.includes(myId);
+      return {
+        id: `opt-${idx}`,
+        label,
+        votes: voters.length,
+        votedByMe,
+      };
+    });
+
+    const updatedPoll: PollData | undefined = msg.poll
+      ? {
+          question: msg.poll.question,
+          options: pollOptions,
+        }
+      : undefined;
+
+    const updatedMsg: Msg = {
+      ...msg,
+      pollVotesUserMap: nextVoteMap,
+      pollVotesRaw: nextPollVotesRaw,
+      poll: updatedPoll,
+    };
+
+    setMessagesByChat((prev) => {
+      const list = prev[active.id] ?? [];
+      return {
+        ...prev,
+        [active.id]: list.map((m) => (m.id === msg.id ? updatedMsg : m)),
+      };
+    });
+    saveLocalMessages(user.uid, {
+      ...messagesByChat,
+      [active.id]: (messagesByChat[active.id] ?? []).map((m) => (m.id === msg.id ? updatedMsg : m)),
+    });
+
+    saveSharedMessage(active.id, updatedMsg);
+
+    if (isCloud) {
+      void updateDoc(doc(db, "conversations", active.id, "messages", msg.id), {
+        pollVotesUserMap: nextVoteMap,
+        pollVotes: nextPollVotesRaw,
         updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, msgPath);
+      }).catch(() => {});
     }
   };
 
@@ -2460,31 +2558,68 @@ function Messages() {
       }, 340);
     }
 
-    const exists = targetMsg.reactionsRaw.includes(emoji);
-    const nextReactions = exists
-      ? targetMsg.reactionsRaw.filter((r) => r !== emoji)
-      : [...targetMsg.reactionsRaw, emoji].slice(0, BLUEPRINT_LIMITS.MAX_REACTIONS);
+    const myId = user.lumenId || user.uid;
+    const currentReactionsUserMap: Record<string, string[]> = { ...(targetMsg.reactionsUserMap || {}) };
+    const currentUsers = currentReactionsUserMap[emoji] || [];
+    const hasReacted =
+      currentUsers.includes(user.uid) ||
+      (Boolean(user.lumenId) && currentUsers.includes(user.lumenId)) ||
+      currentUsers.includes(myId);
 
-    if (!isCloud) {
-      const reactionsMap: Record<string, { count: number; me: boolean }> = {};
-      for (const em of nextReactions) {
-        reactionsMap[em] = { count: 1, me: true };
+    const nextReactionsUserMap: Record<string, string[]> = { ...currentReactionsUserMap };
+    if (hasReacted) {
+      const filtered = currentUsers.filter((id) => id !== user.uid && id !== user.lumenId && id !== myId);
+      if (filtered.length > 0) {
+        nextReactionsUserMap[emoji] = filtered;
+      } else {
+        delete nextReactionsUserMap[emoji];
       }
-      const updatedList = activeMsgs.map((m) =>
-        m.id === msgId ? { ...m, reactionsRaw: nextReactions, reactions: reactionsMap } : m,
-      );
-      saveLocalMessages(user.uid, { ...messagesByChat, [active.id]: updatedList });
-      return;
+    } else {
+      nextReactionsUserMap[emoji] = [...currentUsers, myId];
     }
 
-    const msgPath = `conversations/${active.id}/messages/${msgId}`;
-    try {
-      await updateDoc(doc(db, "conversations", active.id, "messages", msgId), {
-        reactions: nextReactions,
+    const nextReactionsRaw = Object.keys(nextReactionsUserMap).slice(0, BLUEPRINT_LIMITS.MAX_REACTIONS);
+
+    const reactionsMap: Record<string, { count: number; me: boolean }> = {};
+    for (const [em, users] of Object.entries(nextReactionsUserMap)) {
+      if (users.length > 0) {
+        reactionsMap[em] = {
+          count: users.length,
+          me:
+            users.includes(user.uid) ||
+            (Boolean(user.lumenId) && users.includes(user.lumenId)) ||
+            users.includes(myId),
+        };
+      }
+    }
+
+    const updatedMsg: Msg = {
+      ...targetMsg,
+      reactionsUserMap: nextReactionsUserMap,
+      reactionsRaw: nextReactionsRaw,
+      reactions: reactionsMap,
+    };
+
+    setMessagesByChat((prev) => {
+      const list = prev[active.id] ?? [];
+      return {
+        ...prev,
+        [active.id]: list.map((m) => (m.id === msgId ? updatedMsg : m)),
+      };
+    });
+    saveLocalMessages(user.uid, {
+      ...messagesByChat,
+      [active.id]: (messagesByChat[active.id] ?? []).map((m) => (m.id === msgId ? updatedMsg : m)),
+    });
+
+    saveSharedMessage(active.id, updatedMsg);
+
+    if (isCloud) {
+      void updateDoc(doc(db, "conversations", active.id, "messages", msgId), {
+        reactionsUserMap: nextReactionsUserMap,
+        reactions: nextReactionsRaw,
         updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, msgPath);
+      }).catch(() => {});
     }
   };
 
@@ -2580,8 +2715,8 @@ function Messages() {
         stream.getTracks().forEach((t) => t.stop());
         setRecording(false);
         const blob = new Blob(chunks, { type: "audio/webm" });
-        if (blob.size > 350 * 1024) {
-          toast.error("Voice note is too long for Firestore document limit");
+        if (blob.size > 5 * 1024 * 1024) {
+          toast.error("Voice note is too large (maximum 5 MB)");
           return;
         }
         const dataUrl = await readBlobAsDataUrl(blob);

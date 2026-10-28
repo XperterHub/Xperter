@@ -48,7 +48,9 @@ export type RealtimeEvent =
   | { type: "FRIEND_REQUEST_UPDATED"; requestId: string; status: "accepted" | "declined" }
   | { type: "CONVERSATION_UPSERTED"; conversation: RealtimeConversation }
   | { type: "MESSAGE_SENT"; convId: string; message: any }
-  | { type: "USER_DIRECTORY_UPDATED"; user: RealtimeDirectoryUser };
+  | { type: "MESSAGE_UPDATED"; convId: string; message: any }
+  | { type: "USER_DIRECTORY_UPDATED"; user: RealtimeDirectoryUser }
+  | { type: "CALL_SIGNAL"; convId: string; signal: any };
 
 export const SHARED_FRIEND_REQUESTS_KEY = "xperter.shared_friend_requests.v2";
 export const SHARED_CONVERSATIONS_KEY = "xperter.shared_conversations.v2";
@@ -172,6 +174,25 @@ export async function publishToCloudRelay(topic: string, event: RealtimeEvent): 
   }
 }
 
+async function parseRelayPayload(parsed: any): Promise<RealtimeEvent | null> {
+  if (!parsed || parsed.event !== "message") return null;
+  // If payload was over 4KB (e.g. voice note audioUrl or file attachment), ntfy.sh saved it as an attachment file
+  if (parsed.attachment && parsed.attachment.url) {
+    try {
+      const res = await fetch(parsed.attachment.url);
+      if (res.ok) {
+        return (await res.json()) as RealtimeEvent;
+      }
+    } catch {}
+  }
+  if (typeof parsed.message === "string") {
+    try {
+      return JSON.parse(parsed.message) as RealtimeEvent;
+    } catch {}
+  }
+  return null;
+}
+
 function handleIncomingRelayEvent(ev: RealtimeEvent) {
   if (!ev || typeof ev !== "object" || !ev.type) return;
 
@@ -181,7 +202,6 @@ function handleIncomingRelayEvent(ev: RealtimeEvent) {
       writeAllSharedFriendRequests([ev.request, ...all]);
     }
     try {
-      const fromKey = `lumen.requests.${ev.request.fromUid}`;
       const toKey = `lumen.requests.${ev.request.toUid}`;
       const rawTo = window.localStorage.getItem(toKey);
       const toList = rawTo ? JSON.parse(rawTo) : [];
@@ -242,16 +262,22 @@ function handleIncomingRelayEvent(ev: RealtimeEvent) {
         window.localStorage.setItem(key, JSON.stringify(updatedChats));
       }
     } catch {}
-  } else if (ev.type === "MESSAGE_SENT" && ev.convId && ev.message) {
+  } else if ((ev.type === "MESSAGE_SENT" || ev.type === "MESSAGE_UPDATED") && ev.convId && ev.message) {
     const existing = readSharedMessages(ev.convId);
-    if (!existing.some((m) => m.id === ev.message.id)) {
-      try {
-        window.localStorage.setItem(
-          `${SHARED_MESSAGES_KEY_PREFIX}${ev.convId}`,
-          JSON.stringify([...existing, ev.message]),
-        );
-      } catch {}
+    const idx = existing.findIndex((m) => m.id === ev.message.id);
+    let next: any[];
+    if (idx >= 0) {
+      next = [...existing];
+      next[idx] = { ...next[idx], ...ev.message };
+    } else {
+      next = [...existing, ev.message];
     }
+    try {
+      window.localStorage.setItem(
+        `${SHARED_MESSAGES_KEY_PREFIX}${ev.convId}`,
+        JSON.stringify(next),
+      );
+    } catch {}
   }
 
   notifyListeners(ev);
@@ -289,10 +315,8 @@ export function connectUserCloudRelay(lumenId: string, uid?: string): () => void
         for (const line of lines) {
           try {
             const parsed = JSON.parse(line);
-            if (parsed.event === "message" && parsed.message) {
-              const ev = JSON.parse(parsed.message) as RealtimeEvent;
-              handleIncomingRelayEvent(ev);
-            }
+            const ev = await parseRelayPayload(parsed);
+            if (ev) handleIncomingRelayEvent(ev);
           } catch {}
         }
       } catch {}
@@ -308,13 +332,11 @@ export function connectUserCloudRelay(lumenId: string, uid?: string): () => void
       if (isClosed) return;
       try {
         ws = new WebSocket(`wss://ntfy.sh/${topic}/ws?since=24h`);
-        ws.onmessage = (msgEvent) => {
+        ws.onmessage = async (msgEvent) => {
           try {
             const parsed = JSON.parse(msgEvent.data);
-            if (parsed.event === "message" && parsed.message) {
-              const ev = JSON.parse(parsed.message) as RealtimeEvent;
-              handleIncomingRelayEvent(ev);
-            }
+            const ev = await parseRelayPayload(parsed);
+            if (ev) handleIncomingRelayEvent(ev);
           } catch {}
         };
         ws.onclose = () => {
@@ -368,10 +390,8 @@ export function connectConversationCloudRelay(convId: string): () => void {
       for (const line of lines) {
         try {
           const parsed = JSON.parse(line);
-          if (parsed.event === "message" && parsed.message) {
-            const ev = JSON.parse(parsed.message) as RealtimeEvent;
-            handleIncomingRelayEvent(ev);
-          }
+          const ev = await parseRelayPayload(parsed);
+          if (ev) handleIncomingRelayEvent(ev);
         } catch {}
       }
     } catch {}
@@ -386,13 +406,11 @@ export function connectConversationCloudRelay(convId: string): () => void {
     if (isClosed) return;
     try {
       ws = new WebSocket(`wss://ntfy.sh/${topic}/ws?since=24h`);
-      ws.onmessage = (msgEvent) => {
+      ws.onmessage = async (msgEvent) => {
         try {
           const parsed = JSON.parse(msgEvent.data);
-          if (parsed.event === "message" && parsed.message) {
-            const ev = JSON.parse(parsed.message) as RealtimeEvent;
-            handleIncomingRelayEvent(ev);
-          }
+          const ev = await parseRelayPayload(parsed);
+          if (ev) handleIncomingRelayEvent(ev);
         } catch {}
       };
       ws.onclose = () => {
@@ -406,6 +424,73 @@ export function connectConversationCloudRelay(convId: string): () => void {
     } catch {
       if (!isClosed) {
         reconnectTimer = setTimeout(connectWs, 5000);
+      }
+    }
+  };
+
+  connectWs();
+
+  return () => {
+    isClosed = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    try {
+      ws?.close();
+    } catch {}
+  };
+}
+
+/**
+ * Connects to the WebRTC call room cloud relay topic for real-time signaling.
+ */
+export function connectCallCloudRelay(convId: string): () => void {
+  if (typeof window === "undefined" || !convId) return () => {};
+
+  const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const topic = `xperter_call_${cleanConv}`;
+
+  const pollMissed = async () => {
+    try {
+      const res = await fetch(`${CLOUD_RELAY_BASE}/${topic}/json?poll=1&since=10m`);
+      if (!res.ok) return;
+      const text = await res.text();
+      const lines = text.trim().split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          const ev = await parseRelayPayload(parsed);
+          if (ev) handleIncomingRelayEvent(ev);
+        } catch {}
+      }
+    } catch {}
+  };
+  void pollMissed();
+
+  let ws: WebSocket | null = null;
+  let isClosed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const connectWs = () => {
+    if (isClosed) return;
+    try {
+      ws = new WebSocket(`wss://ntfy.sh/${topic}/ws?since=10m`);
+      ws.onmessage = async (msgEvent) => {
+        try {
+          const parsed = JSON.parse(msgEvent.data);
+          const ev = await parseRelayPayload(parsed);
+          if (ev) handleIncomingRelayEvent(ev);
+        } catch {}
+      };
+      ws.onclose = () => {
+        if (!isClosed) {
+          reconnectTimer = setTimeout(connectWs, 2000);
+        }
+      };
+      ws.onerror = () => {
+        try { ws?.close(); } catch {}
+      };
+    } catch {
+      if (!isClosed) {
+        reconnectTimer = setTimeout(connectWs, 3000);
       }
     }
   };

@@ -4,14 +4,16 @@ import {
   doc,
   onSnapshot,
   query,
-  serverTimestamp,
   setDoc,
   updateDoc,
   where,
-  deleteDoc,
-  getDocs,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { db, normalizeLumenId, sanitizeId } from "@/lib/firebase";
+import {
+  connectCallCloudRelay,
+  publishToCloudRelay,
+  subscribeToRealtimeEvents,
+} from "@/lib/realtime-sync";
 
 export type CallKind = "audio" | "video";
 export type CallStatus = "ringing" | "connected" | "ended" | "declined";
@@ -96,50 +98,93 @@ class RingtonePlayer {
 export const ringtone = new RingtonePlayer();
 
 /**
- * Listens for incoming calls targeting the authenticated user.
+ * Listens for incoming calls targeting the authenticated user across both
+ * cloud pub/sub relay and Firestore.
  */
 export function listenForIncomingCalls(
   myUid: string,
   onIncoming: (call: CallDocData | null) => void,
+  myLumenId?: string,
 ): () => void {
-  if (!myUid) return () => {};
+  if (!myUid && !myLumenId) return () => {};
 
-  const callsRef = collection(db, "calls");
-  const q = query(callsRef, where("calleeUid", "==", myUid), where("status", "==", "ringing"));
+  const cleanMyUid = sanitizeId(myUid).toLowerCase();
+  const normMyLumen = normalizeLumenId(myLumenId || "").toLowerCase();
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      if (snapshot.empty) {
-        onIncoming(null);
-        ringtone.stop();
-        return;
+  // 1. Listen via instant cloud relay pub/sub
+  const unsubRelay = subscribeToRealtimeEvents((event) => {
+    if (event.type !== "CALL_SIGNAL") return;
+    const sig = event.signal;
+    if (!sig) return;
+
+    if (sig.type === "offer" && sig.status === "ringing") {
+      const targetUid = sanitizeId(sig.calleeUid || "").toLowerCase();
+      const targetLumen = normalizeLumenId(sig.calleeLumenId || "").toLowerCase();
+      const isTarget =
+        (cleanMyUid && (targetUid === cleanMyUid || targetUid === `usr_${normMyLumen}`)) ||
+        (normMyLumen && targetLumen === normMyLumen);
+
+      if (isTarget) {
+        if (Date.now() - (sig.createdAtMs || 0) < 45000) {
+          ringtone.startRinging();
+          onIncoming({
+            id: sig.convId,
+            convId: sig.convId,
+            callerUid: sig.callerUid,
+            callerName: sig.callerName,
+            callerLumenId: sig.callerLumenId,
+            calleeUid: sig.calleeUid,
+            calleeName: sig.calleeName,
+            calleeLumenId: sig.calleeLumenId,
+            kind: sig.kind,
+            status: "ringing",
+            offer: sig.offer,
+            createdAtMs: sig.createdAtMs,
+          });
+        }
       }
-      const docSnap = snapshot.docs[0];
-      if (!docSnap) {
-        onIncoming(null);
-        ringtone.stop();
-        return;
-      }
-      const data = docSnap.data() as CallDocData;
-      // Ring for 45 seconds max
-      if (Date.now() - (data.createdAtMs || 0) > 45000) {
-        void updateDoc(doc(db, "calls", docSnap.id), { status: "ended" }).catch(() => {});
-        onIncoming(null);
-        ringtone.stop();
-        return;
-      }
-      ringtone.startRinging();
-      onIncoming({ ...data, id: docSnap.id });
-    },
-    () => {
-      // Ignore listener error
-    },
-  );
+    } else if (sig.type === "ended" || sig.type === "declined") {
+      ringtone.stop();
+      onIncoming(null);
+    }
+  });
+
+  // 2. Also listen on Firestore when reachable
+  let unsubFirestore: (() => void) | undefined;
+  try {
+    const callsRef = collection(db, "calls");
+    const q = query(callsRef, where("calleeUid", "==", myUid), where("status", "==", "ringing"));
+    unsubFirestore = onSnapshot(
+      q,
+      (snapshot) => {
+        if (snapshot.empty) {
+          return;
+        }
+        const docSnap = snapshot.docs[0];
+        if (!docSnap) return;
+        const data = docSnap.data() as CallDocData;
+        if (Date.now() - (data.createdAtMs || 0) > 45000) {
+          void updateDoc(doc(db, "calls", docSnap.id), { status: "ended" }).catch(() => {});
+          onIncoming(null);
+          ringtone.stop();
+          return;
+        }
+        ringtone.startRinging();
+        onIncoming({ ...data, id: docSnap.id });
+      },
+      () => {},
+    );
+  } catch {}
+
+  return () => {
+    unsubRelay();
+    unsubFirestore?.();
+    ringtone.stop();
+  };
 }
 
 /**
- * Initiates an outgoing audio or video call via WebRTC and Firestore signaling.
+ * Initiates an outgoing audio or video call via WebRTC with global cloud relay signaling.
  */
 export async function startWebRTCCall(params: {
   convId: string;
@@ -174,20 +219,33 @@ export async function startWebRTCCall(params: {
     }
   };
 
+  const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const callRoomTopic = `xperter_call_${cleanConv}`;
+
+  // Connect to the call room cloud relay
+  const unsubCallRelay = connectCallCloudRelay(convId);
+
   const callDocRef = doc(db, "calls", convId);
   const callerCandidatesRef = collection(db, "calls", convId, "callerCandidates");
   const calleeCandidatesRef = collection(db, "calls", convId, "calleeCandidates");
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
-      void addDoc(callerCandidatesRef, event.candidate.toJSON()).catch(() => {});
+      const candJson = event.candidate.toJSON();
+      void publishToCloudRelay(callRoomTopic, {
+        type: "CALL_SIGNAL",
+        convId,
+        signal: { type: "candidate", role: "caller", candidate: candJson },
+      });
+      void addDoc(callerCandidatesRef, candJson).catch(() => {});
     }
   };
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  await setDoc(callDocRef, {
+  const signalOffer = {
+    type: "offer",
     convId,
     callerUid: caller.uid,
     callerName: caller.name,
@@ -196,52 +254,106 @@ export async function startWebRTCCall(params: {
     calleeName: callee.name,
     calleeLumenId: callee.lumenId,
     kind,
-    status: "ringing",
+    status: "ringing" as const,
     offer: { sdp: offer.sdp, type: offer.type },
     createdAtMs: Date.now(),
-  });
+  };
+
+  // 1. Publish offer to callee's personal inbox topic so their screen rings instantly
+  const calleeTopics = new Set<string>();
+  if (callee.lumenId) {
+    const norm = normalizeLumenId(callee.lumenId).toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (norm) calleeTopics.add(`xperter_inbox_${norm}`);
+    const raw = callee.lumenId.trim().replace(/^@+/, "").toLowerCase().replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (raw) calleeTopics.add(`xperter_inbox_${raw}`);
+  }
+  if (callee.uid) {
+    const cleanUid = sanitizeId(callee.uid).toLowerCase();
+    if (cleanUid) calleeTopics.add(`xperter_inbox_${cleanUid}`);
+  }
+  for (const t of calleeTopics) {
+    void publishToCloudRelay(t, { type: "CALL_SIGNAL", convId, signal: signalOffer });
+  }
+
+  // 2. Also publish to call room topic
+  void publishToCloudRelay(callRoomTopic, { type: "CALL_SIGNAL", convId, signal: signalOffer });
+
+  // 3. Save to Firestore in background
+  void setDoc(callDocRef, signalOffer).catch(() => {});
 
   ringtone.startRinging();
 
-  // Listen for Answer
-  const unsubCallDoc = onSnapshot(callDocRef, async (snapshot) => {
-    if (!snapshot.exists()) {
-      onStatusChange("ended");
-      ringtone.stop();
-      return;
-    }
-    const data = snapshot.data() as CallDocData;
-    if (data.status === "declined" || data.status === "ended") {
-      ringtone.stop();
-      onStatusChange(data.status);
-      cleanup();
-    } else if (data.status === "connected" && data.answer && !pc.currentRemoteDescription) {
+  // Listen for answer and callee ICE candidates via cloud relay
+  const unsubSignal = subscribeToRealtimeEvents(async (event) => {
+    if (event.type !== "CALL_SIGNAL" || event.convId !== convId) return;
+    const sig = event.signal;
+    if (!sig) return;
+
+    if (sig.type === "answer" && sig.role === "callee" && sig.answer && !pc.currentRemoteDescription) {
       ringtone.stop();
       onStatusChange("connected");
-      const answerDesc = new RTCSessionDescription(data.answer as RTCSessionDescriptionInit);
-      await pc.setRemoteDescription(answerDesc);
+      try {
+        const answerDesc = new RTCSessionDescription(sig.answer as RTCSessionDescriptionInit);
+        await pc.setRemoteDescription(answerDesc);
+      } catch {}
+    } else if (sig.type === "candidate" && sig.role === "callee" && sig.candidate) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
+      } catch {}
+    } else if (sig.type === "declined" || sig.type === "ended") {
+      ringtone.stop();
+      onStatusChange(sig.type);
+      cleanup();
     }
   });
 
-  // Listen for Remote ICE candidates from callee
-  const unsubCalleeCandidates = onSnapshot(calleeCandidatesRef, (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
-      if (change.type === "added") {
-        const candidateData = change.doc.data();
-        void pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch(() => {});
+  // Also listen on Firestore if active
+  let unsubCallDoc: (() => void) | undefined;
+  let unsubCalleeCandidates: (() => void) | undefined;
+  try {
+    unsubCallDoc = onSnapshot(callDocRef, async (snapshot) => {
+      if (!snapshot.exists()) return;
+      const data = snapshot.data() as CallDocData;
+      if (data.status === "declined" || data.status === "ended") {
+        ringtone.stop();
+        onStatusChange(data.status);
+        cleanup();
+      } else if (data.status === "connected" && data.answer && !pc.currentRemoteDescription) {
+        ringtone.stop();
+        onStatusChange("connected");
+        const answerDesc = new RTCSessionDescription(data.answer as RTCSessionDescriptionInit);
+        await pc.setRemoteDescription(answerDesc).catch(() => {});
       }
     });
-  });
+
+    unsubCalleeCandidates = onSnapshot(calleeCandidatesRef, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const candidateData = change.doc.data();
+          void pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch(() => {});
+        }
+      });
+    });
+  } catch {}
 
   const cleanup = () => {
     ringtone.stop();
-    unsubCallDoc();
-    unsubCalleeCandidates();
+    unsubSignal();
+    unsubCallRelay();
+    unsubCallDoc?.();
+    unsubCalleeCandidates?.();
     localStream.getTracks().forEach((t) => t.stop());
-    pc.close();
+    try {
+      pc.close();
+    } catch {}
   };
 
   const endCall = () => {
+    void publishToCloudRelay(callRoomTopic, {
+      type: "CALL_SIGNAL",
+      convId,
+      signal: { type: "ended", convId },
+    });
     cleanup();
     void updateDoc(callDocRef, { status: "ended" }).catch(() => {});
   };
@@ -268,7 +380,7 @@ export async function startWebRTCCall(params: {
 }
 
 /**
- * Answers an incoming audio or video call.
+ * Answers an incoming audio or video call with real-time cloud signaling.
  */
 export async function answerWebRTCCall(params: {
   callId: string;
@@ -303,13 +415,25 @@ export async function answerWebRTCCall(params: {
     }
   };
 
+  const cleanConv = callId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const callRoomTopic = `xperter_call_${cleanConv}`;
+
+  // Connect to the call room cloud relay
+  const unsubCallRelay = connectCallCloudRelay(callId);
+
   const callDocRef = doc(db, "calls", callId);
   const calleeCandidatesRef = collection(db, "calls", callId, "calleeCandidates");
   const callerCandidatesRef = collection(db, "calls", callId, "callerCandidates");
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
-      void addDoc(calleeCandidatesRef, event.candidate.toJSON()).catch(() => {});
+      const candJson = event.candidate.toJSON();
+      void publishToCloudRelay(callRoomTopic, {
+        type: "CALL_SIGNAL",
+        convId: callId,
+        signal: { type: "candidate", role: "callee", candidate: candJson },
+      });
+      void addDoc(calleeCandidatesRef, candJson).catch(() => {});
     }
   };
 
@@ -319,45 +443,82 @@ export async function answerWebRTCCall(params: {
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
 
-  await updateDoc(callDocRef, {
+  const answerSignal = {
+    type: "answer",
+    role: "callee" as const,
+    answer: { sdp: answer.sdp, type: answer.type },
+    status: "connected" as const,
+  };
+
+  void publishToCloudRelay(callRoomTopic, {
+    type: "CALL_SIGNAL",
+    convId: callId,
+    signal: answerSignal,
+  });
+
+  void updateDoc(callDocRef, {
     answer: { sdp: answer.sdp, type: answer.type },
     status: "connected",
-  });
+  }).catch(() => {});
+
   onStatusChange("connected");
 
-  // Listen for Call status changes (e.g. caller hung up)
-  const unsubCallDoc = onSnapshot(callDocRef, (snapshot) => {
-    if (!snapshot.exists()) {
-      onStatusChange("ended");
-      cleanup();
-      return;
-    }
-    const data = snapshot.data() as CallDocData;
-    if (data.status === "ended") {
+  // Listen for caller's candidates or end signals via cloud relay
+  const unsubSignal = subscribeToRealtimeEvents(async (event) => {
+    if (event.type !== "CALL_SIGNAL" || event.convId !== callId) return;
+    const sig = event.signal;
+    if (!sig) return;
+
+    if (sig.type === "candidate" && sig.role === "caller" && sig.candidate) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(sig.candidate));
+      } catch {}
+    } else if (sig.type === "ended") {
       onStatusChange("ended");
       cleanup();
     }
   });
 
-  // Listen for caller's ICE candidates
-  const unsubCallerCandidates = onSnapshot(callerCandidatesRef, (snapshot) => {
-    snapshot.docChanges().forEach((change) => {
-      if (change.type === "added") {
-        const candidateData = change.doc.data();
-        void pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch(() => {});
+  let unsubCallDoc: (() => void) | undefined;
+  let unsubCallerCandidates: (() => void) | undefined;
+  try {
+    unsubCallDoc = onSnapshot(callDocRef, (snapshot) => {
+      if (!snapshot.exists()) return;
+      const data = snapshot.data() as CallDocData;
+      if (data.status === "ended") {
+        onStatusChange("ended");
+        cleanup();
       }
     });
-  });
+
+    unsubCallerCandidates = onSnapshot(callerCandidatesRef, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const candidateData = change.doc.data();
+          void pc.addIceCandidate(new RTCIceCandidate(candidateData)).catch(() => {});
+        }
+      });
+    });
+  } catch {}
 
   const cleanup = () => {
     ringtone.stop();
-    unsubCallDoc();
-    unsubCallerCandidates();
+    unsubSignal();
+    unsubCallRelay();
+    unsubCallDoc?.();
+    unsubCallerCandidates?.();
     localStream.getTracks().forEach((t) => t.stop());
-    pc.close();
+    try {
+      pc.close();
+    } catch {}
   };
 
   const endCall = () => {
+    void publishToCloudRelay(callRoomTopic, {
+      type: "CALL_SIGNAL",
+      convId: callId,
+      signal: { type: "ended", convId: callId },
+    });
     cleanup();
     void updateDoc(callDocRef, { status: "ended" }).catch(() => {});
   };
@@ -388,6 +549,15 @@ export async function answerWebRTCCall(params: {
  */
 export async function declineWebRTCCall(callId: string): Promise<void> {
   ringtone.stop();
+  const cleanConv = callId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const callRoomTopic = `xperter_call_${cleanConv}`;
+
+  void publishToCloudRelay(callRoomTopic, {
+    type: "CALL_SIGNAL",
+    convId: callId,
+    signal: { type: "declined", convId: callId },
+  });
+
   try {
     await updateDoc(doc(db, "calls", callId), { status: "declined" });
   } catch {}
