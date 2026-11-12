@@ -45,6 +45,7 @@ import {
 import {
   connectGoogleAccountForDrive,
   deleteVaultDocumentFromGoogleDrive,
+  DRIVE_AUTH_STORAGE_KEY,
   ensureDriveUserDocFolder,
   formatFileSize,
   getCustomCloudFolderName,
@@ -325,18 +326,34 @@ function ProfilePage() {
 
   // Auto-initialize Xperter Drive hierarchy in background whenever connected
   useEffect(() => {
-    const token = getDriveAccessToken();
-    if (token) {
-      setDriveConnected(true);
-      const email = getDriveConnectedEmail();
-      if (email) setDriveEmail(email);
-      initializeXperterDriveHierarchy({
-        userKey: effectiveUid || email || "default",
-        accessToken: token,
-      }).catch((err) => {
-        console.warn("Background Xperter drive hierarchy sync:", err);
-      });
-    }
+    const syncDriveStatus = () => {
+      const token = getDriveAccessToken();
+      const isConnected = Boolean(token);
+      setDriveConnected(isConnected);
+      if (isConnected && token) {
+        const email = getDriveConnectedEmail();
+        if (email) setDriveEmail(email);
+        initializeXperterDriveHierarchy({
+          userKey: effectiveUid || email || "default",
+          accessToken: token,
+        }).catch((err) => {
+          console.warn("Background Xperter drive hierarchy sync:", err);
+        });
+      }
+    };
+
+    syncDriveStatus();
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === DRIVE_AUTH_STORAGE_KEY) {
+        syncDriveStatus();
+      }
+    };
+
+    window.addEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+    };
   }, [effectiveUid]);
 
   // Cloud folder rename handler
@@ -1267,9 +1284,20 @@ function ProfilePage() {
             <div className="flex items-center gap-2.5 sm:gap-3 pt-1">
               <button
                 type="button"
-                onClick={() => setCloudUploadModalOpen(true)}
+                onClick={() => {
+                  if (!driveConnected) {
+                    toast.info("Please connect your Google Drive account first.");
+                    return;
+                  }
+                  setCloudUploadModalOpen(true);
+                }}
                 data-testid="open-cloud-upload-btn"
-                className="btn-ink liquid-press flex h-9.5 flex-1 items-center justify-center gap-1.5 rounded-full px-3 sm:px-4 text-xs font-semibold shadow-sm"
+                title={driveConnected ? "Upload files to Google Drive" : "Connect Google Drive to upload"}
+                className={`flex h-9.5 flex-1 items-center justify-center gap-1.5 rounded-full px-3 sm:px-4 text-xs font-semibold transition-all duration-300 ${
+                  driveConnected
+                    ? "btn-ink liquid-press shadow-sm opacity-100 cursor-pointer"
+                    : "bg-white/5 dark:bg-white/5 text-muted-foreground/35 border border-white/5 opacity-35 cursor-not-allowed select-none shadow-none"
+                }`}
               >
                 <Upload className="h-3.5 w-3.5" />
                 <span>Upload</span>

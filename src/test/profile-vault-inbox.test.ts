@@ -6,6 +6,10 @@ import {
   hashVaultSecret,
   setVaultPassword,
   verifyVaultPassword,
+  getDriveAccessToken,
+  getDriveConnectedEmail,
+  setDriveAccessTokenInMemory,
+  DRIVE_AUTH_STORAGE_KEY,
 } from "@/lib/google-drive-vault";
 import {
   formatVaultDocumentFileName,
@@ -269,6 +273,38 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     const found = allAccounts.find((acc) => acc.email === email);
     expect(found).toBeDefined();
     expect(found?.usernameId).toBe(assignedUsernameId);
+  });
+
+  it("persists Google Drive connection across page reloads and hydrates access token", () => {
+    // 1. Initial state: clear token
+    setDriveAccessTokenInMemory(null, null);
+    expect(getDriveAccessToken()).toBeNull();
+
+    // 2. Connect Google Drive
+    const testToken = "ya29.test_oauth_access_token_12345";
+    const testEmail = "nagarajamutha0@gmail.com";
+    setDriveAccessTokenInMemory(testToken, testEmail);
+
+    expect(getDriveAccessToken()).toBe(testToken);
+    expect(getDriveConnectedEmail()).toBe(testEmail);
+
+    // Verify it is saved in storage
+    const rawStored = window.localStorage.getItem(DRIVE_AUTH_STORAGE_KEY);
+    expect(rawStored).toBeTruthy();
+    const parsed = JSON.parse(rawStored!);
+    expect(parsed.accessToken).toBe(testToken);
+    expect(parsed.email).toBe(testEmail);
+
+    // 3. Simulate page reload (re-reading from storage)
+    const restoredToken = getDriveAccessToken();
+    expect(restoredToken).toBe(testToken);
+    const restoredEmail = getDriveConnectedEmail();
+    expect(restoredEmail).toBe(testEmail);
+
+    // 4. Disconnecting clears storage
+    setDriveAccessTokenInMemory(null, null);
+    expect(getDriveAccessToken()).toBeNull();
+    expect(window.localStorage.getItem(DRIVE_AUTH_STORAGE_KEY)).toBeNull();
   });
 });
 

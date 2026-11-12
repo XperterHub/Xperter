@@ -16,16 +16,71 @@ import {
 } from "@/lib/xperter-drive-organizer";
 
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+export const DRIVE_AUTH_STORAGE_KEY = "xperter.drive.auth";
 
-// Per workspace-integration skill: keep access token in memory only (never localStorage/sessionStorage)
+const inMemoryStore = new Map<string, string>();
+const memoryStorage: Storage = {
+  getItem: (key: string) => inMemoryStore.get(key) ?? null,
+  setItem: (key: string, val: string) => {
+    inMemoryStore.set(key, String(val));
+  },
+  removeItem: (key: string) => {
+    inMemoryStore.delete(key);
+  },
+  clear: () => {
+    inMemoryStore.clear();
+  },
+  key: (index: number) => Array.from(inMemoryStore.keys())[index] ?? null,
+  get length() {
+    return inMemoryStore.size;
+  },
+};
+
+function getSafeLocalStorage(): Storage {
+  if (typeof window !== "undefined" && window.localStorage) {
+    return window.localStorage;
+  }
+  if (typeof globalThis !== "undefined" && (globalThis as any).localStorage) {
+    return (globalThis as any).localStorage as Storage;
+  }
+  return memoryStorage;
+}
+
 let cachedDriveAccessToken: string | null = null;
 let cachedDriveUserEmail: string | null = null;
 
 export function getDriveAccessToken(): string | null {
-  return cachedDriveAccessToken;
+  if (cachedDriveAccessToken) {
+    return cachedDriveAccessToken;
+  }
+  // Restore persisted Google Drive session from safe storage across reloads
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    try {
+      const raw = storage.getItem(DRIVE_AUTH_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.accessToken) {
+          cachedDriveAccessToken = parsed.accessToken;
+          if (parsed.email && !cachedDriveUserEmail) {
+            cachedDriveUserEmail = parsed.email;
+          }
+          return cachedDriveAccessToken;
+        }
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }
+  return null;
 }
 
 export function getDriveConnectedEmail(): string | null {
+  if (cachedDriveUserEmail) {
+    return cachedDriveUserEmail;
+  }
+  // Try restoring from storage
+  getDriveAccessToken();
   return cachedDriveUserEmail || auth.currentUser?.email || null;
 }
 
@@ -33,6 +88,25 @@ export function setDriveAccessTokenInMemory(token: string | null, email?: string
   cachedDriveAccessToken = token;
   if (email !== undefined) {
     cachedDriveUserEmail = email;
+  }
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    try {
+      if (token) {
+        storage.setItem(
+          DRIVE_AUTH_STORAGE_KEY,
+          JSON.stringify({
+            accessToken: token,
+            email: email || cachedDriveUserEmail || null,
+            savedAt: Date.now(),
+          }),
+        );
+      } else {
+        storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore storage errors
+    }
   }
 }
 
@@ -106,33 +180,6 @@ export function hashVaultSecret(rawPassword: string): string {
   return `vlt_${(h2 >>> 0).toString(16).padStart(8, "0")}${(h1 >>> 0).toString(16).padStart(8, "0")}`;
 }
 
-const inMemoryStore = new Map<string, string>();
-const memoryStorage: Storage = {
-  getItem: (key: string) => inMemoryStore.get(key) ?? null,
-  setItem: (key: string, val: string) => {
-    inMemoryStore.set(key, String(val));
-  },
-  removeItem: (key: string) => {
-    inMemoryStore.delete(key);
-  },
-  clear: () => {
-    inMemoryStore.clear();
-  },
-  key: (index: number) => Array.from(inMemoryStore.keys())[index] ?? null,
-  get length() {
-    return inMemoryStore.size;
-  },
-};
-
-function getSafeLocalStorage(): Storage {
-  if (typeof window !== "undefined" && window.localStorage) {
-    return window.localStorage;
-  }
-  if (typeof globalThis !== "undefined" && (globalThis as any).localStorage) {
-    return (globalThis as any).localStorage as Storage;
-  }
-  return memoryStorage;
-}
 
 export function hasVaultPassword(userKey: string): boolean {
   const storage = getSafeLocalStorage();
@@ -275,8 +322,7 @@ export async function connectGoogleAccountForDrive(userKey?: string): Promise<{
     throw new Error("Google Drive access permission was not granted. Please approve Google Drive access.");
   }
 
-  cachedDriveAccessToken = token;
-  cachedDriveUserEmail = result.user.email || null;
+  setDriveAccessTokenInMemory(token, result.user.email || null);
 
   let folderCache: XperterFolderCache | undefined;
   try {
@@ -326,7 +372,7 @@ export async function ensureDriveUserDocFolder(
   );
 
   if (searchRes.status === 401 || searchRes.status === 403) {
-    cachedDriveAccessToken = null;
+    setDriveAccessTokenInMemory(null, null);
     throw new Error("Google Drive session expired or lacks permission. Please reconnect your Google Account.");
   }
 
@@ -441,7 +487,7 @@ export async function uploadVaultDocumentToGoogleDrive(params: {
   );
 
   if (uploadRes.status === 401 || uploadRes.status === 403) {
-    cachedDriveAccessToken = null;
+    setDriveAccessTokenInMemory(null, null);
     throw new Error("Google Drive authorization expired. Please reconnect your Google Account.");
   }
 
@@ -634,7 +680,7 @@ export async function uploadGenericFileToGoogleDrive(params: {
   );
 
   if (uploadRes.status === 401 || uploadRes.status === 403) {
-    cachedDriveAccessToken = null;
+    setDriveAccessTokenInMemory(null, null);
     throw new Error("Google Drive authorization expired. Please reconnect your Google Account.");
   }
 
