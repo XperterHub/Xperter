@@ -302,11 +302,34 @@ function handleIncomingRelayEvent(ev: RealtimeEvent) {
         writeAllSharedConversations(allConvs);
       } else if (ev.message.senderLumenId || ev.message.senderUid) {
         const senderName = ev.message.senderName || `User ${ev.message.senderLumenId || "Peer"}`;
+        const convParts = ev.convId.startsWith("conv_")
+          ? ev.convId.slice(5).split("_").filter(Boolean)
+          : [];
+        const participantLumenIds = Array.from(
+          new Set(
+            [
+              ev.message.senderLumenId,
+              ev.message.peerLumenId,
+              ...(ev.message.participantLumenIds || []),
+              ...convParts,
+            ].filter(Boolean),
+          ),
+        );
+        const participantIds = Array.from(
+          new Set(
+            [
+              ev.message.senderUid,
+              ev.message.peerUid,
+              ...(ev.message.participantIds || []),
+            ].filter(Boolean),
+          ),
+        );
+
         const newConv: RealtimeConversation = {
           id: ev.convId,
           ownerId: ev.message.senderUid || "",
-          participantIds: [ev.message.senderUid || ""],
-          participantLumenIds: [ev.message.senderLumenId || ""],
+          participantIds,
+          participantLumenIds,
           peerUserId: ev.message.senderUid || "",
           peerLumenId: ev.message.senderLumenId || "",
           name: senderName,
@@ -748,15 +771,24 @@ export function getSharedConversationsForUser(
 ): RealtimeConversation[] {
   const all = readAllSharedConversations();
   const normLumen = normalizeLumenId(lumenId).toLowerCase();
-  const cleanUid = uid ? sanitizeId(uid) : "";
+  const cleanUid = uid ? sanitizeId(uid).toLowerCase() : "";
 
   return all.filter((c) => {
-    const matchesLumen = Array.isArray(c.participantLumenIds) &&
+    const matchesLumen =
+      Boolean(normLumen) &&
+      Array.isArray(c.participantLumenIds) &&
       c.participantLumenIds.some((id) => normalizeLumenId(id).toLowerCase() === normLumen);
-    const matchesUid = cleanUid && Array.isArray(c.participantIds) &&
-      c.participantIds.includes(cleanUid);
-    const matchesOwner = cleanUid ? c.ownerId === cleanUid : false;
-    return matchesLumen || matchesUid || matchesOwner;
+    const matchesUid =
+      Boolean(cleanUid) &&
+      Array.isArray(c.participantIds) &&
+      c.participantIds.some((id) => sanitizeId(id).toLowerCase() === cleanUid);
+    const matchesOwner = Boolean(cleanUid) && sanitizeId(c.ownerId || "").toLowerCase() === cleanUid;
+    const matchesConvId = Boolean(normLumen && c.id.toLowerCase().includes(normLumen));
+    const matchesPeer = Boolean(
+      (normLumen && normalizeLumenId(c.peerLumenId || "").toLowerCase() === normLumen) ||
+      (cleanUid && sanitizeId(c.peerUserId || "").toLowerCase() === cleanUid)
+    );
+    return matchesLumen || matchesUid || matchesOwner || matchesConvId || matchesPeer;
   });
 }
 
@@ -822,14 +854,22 @@ export function saveSharedMessage(
     }
   } catch {}
 
-  broadcastRealtimeEvent({ type: "MESSAGE_SENT", convId, message });
+  const enrichedMessage = {
+    ...message,
+    peerLumenId: meta?.peerLumenId || message.peerLumenId,
+    peerUid: meta?.peerUid || message.peerUid,
+    participantLumenIds: meta?.participantLumenIds || message.participantLumenIds,
+    participantIds: meta?.participantIds || message.participantIds,
+  };
+
+  broadcastRealtimeEvent({ type: "MESSAGE_SENT", convId, message: enrichedMessage });
 
   // 1. Relay message to conversation room topic
   const cleanConv = convId.replace(/[^a-zA-Z0-9_-]/g, "_");
   void publishToCloudRelay(`xperter_conv_${cleanConv}`, {
     type: "MESSAGE_SENT",
     convId,
-    message,
+    message: enrichedMessage,
   });
 
   // 2. Relay message to recipient(s) private inbox topics so devices receive live alerts even if chat is not open

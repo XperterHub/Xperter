@@ -197,8 +197,13 @@ const nowTime = () =>
     .slice(0, BLUEPRINT_LIMITS.MAX_TIME_LENGTH);
 
 function toMillis(ts: unknown): number {
+  if (typeof ts === "number" && !isNaN(ts)) return ts;
   if (ts && typeof ts === "object" && "toMillis" in ts && typeof (ts as Timestamp).toMillis === "function") {
     return (ts as Timestamp).toMillis();
+  }
+  if (typeof ts === "string") {
+    const parsed = Date.parse(ts);
+    if (!isNaN(parsed)) return parsed;
   }
   return Date.now();
 }
@@ -868,15 +873,20 @@ function Messages() {
 
       const isDirect = !d.isGroup;
       const isOwner = d.ownerId === user?.uid;
+      const normUserLumen = normalizeLumenId(user?.lumenId || "").toLowerCase();
+      const normUserUid = sanitizeId(user?.uid || "").toLowerCase();
+
       const peerLumenId = isDirect
         ? (isOwner
             ? (d.peerLumenId as string | undefined)
-            : participantLumenIds?.find((id) => id !== user?.lumenId) || (d.peerLumenId as string | undefined))
+            : participantLumenIds?.find((id) => normalizeLumenId(id).toLowerCase() !== normUserLumen) ||
+              (d.peerLumenId as string | undefined))
         : undefined;
       const peerUserId = isDirect
         ? (isOwner
             ? (d.peerUserId as string | undefined)
-            : participantIds?.find((id) => id !== user?.uid) || (d.ownerId as string | undefined))
+            : participantIds?.find((id) => sanitizeId(id).toLowerCase() !== normUserUid) ||
+              (d.ownerId as string | undefined))
         : undefined;
 
       let name = String(d.name ?? "Conversation");
@@ -886,20 +896,21 @@ function Messages() {
       // For direct conversations, if the current user did not create the conversation,
       // the stored name was the creator's peer name. We resolve the other party's identity!
       if (isDirect && !isOwner && peerLumenId) {
+        const normPeer = normalizeLumenId(peerLumenId);
         const cached =
-          directoryUsersCache[peerLumenId] ||
-          directoryUsersCache[peerLumenId.toLowerCase()] ||
-          directoryUsersCache[peerLumenId.toUpperCase()];
+          directoryUsersCache[normPeer] ||
+          directoryUsersCache[normPeer.toLowerCase()] ||
+          directoryUsersCache[normPeer.toUpperCase()];
         if (cached) {
           name = cached.displayName;
           handle = cached.handle;
         } else {
-          handle = `@${peerLumenId.toLowerCase().replace(/[^a-z0-9_-]+/g, ".")}`;
+          handle = `@${normPeer.toLowerCase().replace(/[^a-z0-9_-]+/g, ".")}`;
           if (name === user?.name) {
-            name = `User ${peerLumenId}`;
+            name = `User ${normPeer}`;
           }
         }
-        role = `Friend · ${peerLumenId}`;
+        role = `Friend · ${normPeer}`;
       }
 
       return {
@@ -926,46 +937,102 @@ function Messages() {
     };
 
     const syncMergedContacts = () => {
-      const byId = new Map<string, Contact>();
-      for (const item of [...ownedList, ...participantList, ...participantLumenList, ...sharedList]) {
-        byId.set(item.id, item);
-      }
-      const loaded = Array.from(byId.values());
-      loaded.sort((a, b) => {
-        if (Boolean(b.pinned) !== Boolean(a.pinned)) {
-          return Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+      setContacts((prevContacts) => {
+        const byId = new Map<string, Contact>();
+        // 1. Preserve existing contacts in state
+        for (const item of prevContacts) {
+          byId.set(item.id, item);
         }
-        return b.updatedAtMs - a.updatedAtMs;
-      });
-      setContacts(loaded);
-      setActiveId((prev) => {
-        if (prev && loaded.some((c) => c.id === prev)) return prev;
-        return loaded[0]?.id ?? null;
+        // 2. Overlay cached local storage contacts
+        try {
+          const rawLocal = window.localStorage.getItem(`lumen.chats.${user.uid}`);
+          if (rawLocal) {
+            const parsed = JSON.parse(rawLocal);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                if (item?.id) byId.set(item.id, item);
+              }
+            }
+          }
+        } catch {}
+        // 3. Overlay Firestore & shared contacts
+        for (const item of [...sharedList, ...ownedList, ...participantList, ...participantLumenList]) {
+          byId.set(item.id, item);
+        }
+        const loaded = Array.from(byId.values());
+        loaded.sort((a, b) => {
+          if (Boolean(b.pinned) !== Boolean(a.pinned)) {
+            return Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+          }
+          return b.updatedAtMs - a.updatedAtMs;
+        });
+        setActiveId((prev) => {
+          if (prev && loaded.some((c) => c.id === prev)) return prev;
+          return loaded[0]?.id ?? null;
+        });
+        return loaded;
       });
     };
 
     // Load initial shared conversations
     const refreshShared = () => {
       const shared = getSharedConversationsForUser(user.lumenId, user.uid);
-      sharedList = shared.map((c) => ({
-        id: c.id,
-        name: c.name,
-        handle: c.handle,
-        role: c.role,
-        online: true,
-        isGroup: c.isGroup,
-        memberCount: c.memberCount,
-        pinned: c.pinned,
-        unread: c.unread,
-        pinnedMsgId: c.pinnedMsgId,
-        lastMessageText: c.lastMessageText,
-        lastMessageTime: c.lastMessageTime,
-        updatedAtMs: c.updatedAtMs,
-        participantIds: c.participantIds,
-        participantLumenIds: c.participantLumenIds,
-        peerUserId: c.peerUserId,
-        peerLumenId: c.peerLumenId,
-      }));
+      const normMyLumen = normalizeLumenId(user.lumenId || "").toLowerCase();
+      const normMyUid = sanitizeId(user.uid || "").toLowerCase();
+
+      sharedList = shared.map((c) => {
+        const isOwner = c.ownerId === user.uid;
+        const peerLumen = !c.isGroup
+          ? (isOwner
+              ? c.peerLumenId
+              : c.participantLumenIds?.find((id) => normalizeLumenId(id).toLowerCase() !== normMyLumen) ||
+                (normalizeLumenId(c.peerLumenId || "").toLowerCase() !== normMyLumen ? c.peerLumenId : undefined) ||
+                c.participantLumenIds?.find(Boolean))
+          : undefined;
+        const peerUid = !c.isGroup
+          ? (isOwner
+              ? c.peerUserId
+              : c.participantIds?.find((id) => sanitizeId(id).toLowerCase() !== normMyUid) ||
+                (sanitizeId(c.peerUserId || "").toLowerCase() !== normMyUid ? c.peerUserId : c.ownerId))
+          : undefined;
+
+        let name = c.name;
+        let handle = c.handle;
+        if (!c.isGroup && !isOwner && peerLumen) {
+          const normPeer = normalizeLumenId(peerLumen);
+          const cached =
+            directoryUsersCache[normPeer] ||
+            directoryUsersCache[normPeer.toLowerCase()] ||
+            directoryUsersCache[normPeer.toUpperCase()];
+          if (cached) {
+            name = cached.displayName;
+            handle = cached.handle;
+          } else if (name === user.name) {
+            name = `User ${normPeer}`;
+            handle = `@${normPeer.toLowerCase()}`;
+          }
+        }
+
+        return {
+          id: c.id,
+          name,
+          handle,
+          role: c.role || `Direct · ${peerLumen || ""}`,
+          online: true,
+          isGroup: c.isGroup,
+          memberCount: c.memberCount,
+          pinned: c.pinned,
+          unread: c.unread,
+          pinnedMsgId: c.pinnedMsgId,
+          lastMessageText: c.lastMessageText,
+          lastMessageTime: c.lastMessageTime,
+          updatedAtMs: c.updatedAtMs,
+          participantIds: c.participantIds,
+          participantLumenIds: c.participantLumenIds,
+          peerUserId: peerUid,
+          peerLumenId: peerLumen,
+        };
+      });
       syncMergedContacts();
     };
     refreshShared();
@@ -1100,7 +1167,7 @@ function Messages() {
       unsubParticipant();
       unsubLumen();
     };
-  }, [authReady, user, directoryUsersCache]);
+  }, [authReady, user?.uid, user?.lumenId]);
 
   // Dynamically resolve peer profile names from userDirectory for all active direct conversations
   useEffect(() => {
@@ -1493,8 +1560,19 @@ function Messages() {
           };
         });
 
-        loaded.sort((a, b) => a.createdAtMs - b.createdAtMs);
-        setMessagesByChat((prev) => ({ ...prev, [activeId]: loaded }));
+        setMessagesByChat((prev) => {
+          const current = prev[activeId] ?? [];
+          const byId = new Map<string, Msg>();
+          for (const m of current) {
+            byId.set(m.id, m);
+          }
+          for (const m of loaded) {
+            byId.set(m.id, m);
+          }
+          const merged = Array.from(byId.values());
+          merged.sort((a, b) => a.createdAtMs - b.createdAtMs);
+          return { ...prev, [activeId]: merged };
+        });
       },
       (error) => {
         console.warn("Firestore messages query offline/unreachable:", error);
@@ -1912,15 +1990,11 @@ function Messages() {
 
   const send = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (friendshipLockState.locked) {
-      toast.error(
-        friendshipLockState.isIncoming
-          ? "Please accept their friend request above to send messages."
-          : "Messaging unlocks once your friend accepts your friend request."
-      );
-      return;
-    }
     if (!text.trim() || !active || !user) return;
+
+    if (friendshipLockState.locked && friendshipLockState.pendingReq && friendshipLockState.isIncoming) {
+      await acceptFriendRequestAndStartConvo(friendshipLockState.pendingReq);
+    }
 
     if (editingMsg) {
       const editedText = text.trim().slice(0, BLUEPRINT_LIMITS.MAX_TEXT_LENGTH);
@@ -2190,6 +2264,33 @@ function Messages() {
       lumenId: cleanId,
       displayName,
     });
+
+    const newContact: Contact = {
+      id: created.id,
+      name: displayName,
+      handle,
+      role: created.role,
+      online: true,
+      isGroup: false,
+      memberCount: 2,
+      pinned: false,
+      unread: 0,
+      lastMessageText: "",
+      lastMessageTime: created.lastMessageTime || "",
+      updatedAtMs: Date.now(),
+      peerLumenId: cleanId,
+      peerUserId: peerUid,
+      participantIds: created.participantIds,
+      participantLumenIds: created.participantLumenIds,
+    };
+
+    setContacts((prev) => {
+      const exists = prev.some((c) => c.id === newContact.id);
+      const next = exists ? prev.map((c) => (c.id === newContact.id ? { ...c, ...newContact } : c)) : [newContact, ...prev];
+      saveLocalContacts(user.uid, next);
+      return next;
+    });
+
     setActiveId(created.id);
     return created.id;
   };
@@ -3412,14 +3513,26 @@ function Messages() {
                                     </button>
                                   )}
                                   {status === "none" && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSendFriendRequestToLiveUser(target)}
-                                      className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
-                                    >
-                                      <UserPlus className="h-3.5 w-3.5" />
-                                      <span>Send Request</span>
-                                    </button>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          handleNewChatOpenChange(false);
+                                          await ensureConversationWithFriend(target.lumenId, target.displayName, target.uid);
+                                        }}
+                                        className="btn-ink rounded-full px-3.5 py-1.5 text-xs font-medium hover:scale-[1.02] active:scale-95 transition-all"
+                                      >
+                                        Message
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSendFriendRequestToLiveUser(target)}
+                                        className="glass-input rounded-full p-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                        title="Send Friend Request"
+                                      >
+                                        <UserPlus className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                               </div>
@@ -3441,7 +3554,19 @@ function Messages() {
                         <p className="mt-1 text-xs text-muted-foreground max-w-xs mx-auto">
                           Send a direct friend request to this User ID. They will receive it in their Workspace Inbox.
                         </p>
-                        <div className="mt-4">
+                        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              handleNewChatOpenChange(false);
+                              const name = friendTargetName.trim() || `User ${friendTargetId.trim()}`;
+                              await ensureConversationWithFriend(friendTargetId.trim(), name);
+                            }}
+                            className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-5 py-2 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            <span>Start Chat</span>
+                          </button>
                           {sentRequestMap[normalizeLumenId(friendTargetId.trim())] || sentRequestMap[friendTargetId.trim().toLowerCase()] ? (
                             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-4 py-2 text-xs font-medium text-emerald-400">
                               <Check className="h-3.5 w-3.5" />
@@ -3451,10 +3576,10 @@ function Messages() {
                             <button
                               type="button"
                               onClick={() => handleSendFriendRequest()}
-                              className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-5 py-2 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all"
+                              className="glass-input liquid-press inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-medium shadow-sm hover:scale-[1.02] active:scale-95 transition-all text-muted-foreground hover:text-foreground"
                             >
                               <UserPlus className="h-3.5 w-3.5" />
-                              <span>Send Friend Request</span>
+                              <span>Add Friend</span>
                             </button>
                           )}
                         </div>
@@ -4523,11 +4648,10 @@ function Messages() {
 
             <button
               type="button"
-              disabled={friendshipLockState.locked}
               onClick={() => setComposerMenuOpen((o) => !o)}
               aria-label="Attach media or poll"
               title="Attach media or poll"
-              className={`glass-input liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`glass-input liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 ${
                 composerMenuOpen ? "btn-ink" : ""
               }`}
             >
@@ -4541,27 +4665,24 @@ function Messages() {
                 onBlur={() => publishTypingStatus(active, false)}
                 maxLength={BLUEPRINT_LIMITS.MAX_TEXT_LENGTH}
                 placeholder={
-                  friendshipLockState.locked
-                    ? friendshipLockState.isIncoming
-                      ? "Accept friend request above to message"
-                      : "Waiting for friend to accept request..."
-                    : recording
-                      ? "Recording… tap stop to send"
+                  recording
+                    ? "Recording… tap stop to send"
+                    : friendshipLockState.locked && friendshipLockState.isIncoming
+                      ? "Reply to accept and chat…"
                       : "Write a message…"
                 }
                 aria-label="Message"
-                disabled={recording || friendshipLockState.locked}
+                disabled={recording}
                 className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
 
             <button
               type="button"
-              disabled={friendshipLockState.locked}
               onClick={toggleRecord}
               aria-label={recording ? "Stop recording" : "Record voice message"}
               title={recording ? "Stop recording" : "Record voice note"}
-              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 ${
                 recording
                   ? "animate-pulse bg-destructive text-destructive-foreground"
                   : "glass-input"
@@ -4571,9 +4692,8 @@ function Messages() {
             </button>
             <button
               type="submit"
-              disabled={friendshipLockState.locked}
               aria-label="Send"
-              className="btn-ink liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="btn-ink liquid-press flex h-10 w-10 shrink-0 items-center justify-center rounded-full sm:h-11 sm:w-11 md:h-12 md:w-12"
             >
               <Send className="h-4 w-4" />
             </button>
