@@ -681,7 +681,7 @@ export async function listExistingChildFolders(params: {
  *   Applications/
  *   Other_Files/
  *
- * Reuses existing folders, creates only missing ones, and caches all IDs.
+ * Reuses existing folders, creates only missing ones in parallel batches, and caches all IDs.
  */
 export async function initializeXperterDriveHierarchy(params: {
   userKey: string;
@@ -720,17 +720,30 @@ export async function initializeXperterDriveHierarchy(params: {
   });
 
   const categoryFolders: Record<string, string> = {};
+  const missingCategories: XperterCategory[] = [];
 
   for (const cat of XPERTER_CATEGORIES) {
     if (existingCategories.has(cat)) {
       categoryFolders[cat] = existingCategories.get(cat)!;
     } else {
-      const created = await findOrCreateDriveFolder({
-        name: cat,
-        parentId: root.id,
-        accessToken,
-      });
-      categoryFolders[cat] = created.id;
+      missingCategories.push(cat);
+    }
+  }
+
+  // Create missing categories concurrently in parallel
+  if (missingCategories.length > 0) {
+    const createdList = await Promise.all(
+      missingCategories.map(async (cat) => {
+        const created = await findOrCreateDriveFolder({
+          name: cat,
+          parentId: root.id,
+          accessToken,
+        });
+        return { cat, id: created.id };
+      }),
+    );
+    for (const item of createdList) {
+      categoryFolders[item.cat] = item.id;
     }
   }
 
@@ -744,16 +757,29 @@ export async function initializeXperterDriveHierarchy(params: {
       accessToken,
     });
 
+    const missingSubs: DocumentSubfolder[] = [];
     for (const sub of DOCUMENT_SUBFOLDERS) {
       if (existingDocSubs.has(sub)) {
         documentSubfolders[sub] = existingDocSubs.get(sub)!;
       } else {
-        const created = await findOrCreateDriveFolder({
-          name: sub,
-          parentId: docRootId,
-          accessToken,
-        });
-        documentSubfolders[sub] = created.id;
+        missingSubs.push(sub);
+      }
+    }
+
+    // Create missing document subfolders concurrently in parallel
+    if (missingSubs.length > 0) {
+      const createdSubs = await Promise.all(
+        missingSubs.map(async (sub) => {
+          const created = await findOrCreateDriveFolder({
+            name: sub,
+            parentId: docRootId,
+            accessToken,
+          });
+          return { sub, id: created.id };
+        }),
+      );
+      for (const item of createdSubs) {
+        documentSubfolders[item.sub] = item.id;
       }
     }
   }
@@ -772,7 +798,8 @@ export async function initializeXperterDriveHierarchy(params: {
 
 /**
  * Resolves the target Google Drive folder ID for a classified file.
- * Automatically initializes or creates any missing folder on demand.
+ * Fast, lean, on-demand resolution: only ensures the specific folder needed for this file,
+ * avoiding blocking sequential network overhead during uploads.
  */
 export async function resolveDestinationFolder(params: {
   classification: FileClassificationResult;
@@ -782,66 +809,75 @@ export async function resolveDestinationFolder(params: {
   const { classification, userKey, accessToken } = params;
   let cache = getXperterFolderCache(userKey);
 
-  if (
-    !cache ||
-    !cache.rootFolderId ||
-    !cache.categoryFolders[classification.category]
-  ) {
-    cache = await initializeXperterDriveHierarchy({ userKey, accessToken });
-  }
-
-  // If document with subfolder
-  if (
+  const rootId = cache?.rootFolderId;
+  const catId = cache?.categoryFolders[classification.category];
+  const isDoc =
     classification.category === "Documents" &&
-    classification.documentSubfolder
-  ) {
-    const sub = classification.documentSubfolder;
-    let targetSubId = cache.documentSubfolders[sub];
+    classification.documentSubfolder;
+  const subId = isDoc
+    ? cache?.documentSubfolders[classification.documentSubfolder!]
+    : undefined;
 
-    if (!targetSubId) {
-      // Create subfolder on demand under Documents
-      const docFolderId =
-        cache.categoryFolders["Documents"] ||
-        (
-          await findOrCreateDriveFolder({
-            name: "Documents",
-            parentId: cache.rootFolderId,
-            accessToken,
-          })
-        ).id;
-
-      const created = await findOrCreateDriveFolder({
-        name: sub,
-        parentId: docFolderId,
-        accessToken,
-      });
-
-      targetSubId = created.id;
-      cache.documentSubfolders[sub] = targetSubId;
-      saveXperterFolderCache(userKey, cache);
-    }
-
+  // Ultra-fast path: already in cache
+  if (rootId && catId && (!isDoc || subId)) {
     return {
-      folderId: targetSubId,
+      folderId: isDoc ? subId! : catId,
       folderPath: classification.folderPath,
     };
   }
 
-  // Category root folder
-  let targetCatId = cache.categoryFolders[classification.category];
-  if (!targetCatId) {
-    const created = await findOrCreateDriveFolder({
-      name: classification.category,
-      parentId: cache.rootFolderId,
+  // Lean on-demand creation for this specific file
+  let activeRootId = rootId;
+  if (!activeRootId) {
+    const root = await findOrCreateDriveFolder({
+      name: XPERTER_ROOT_FOLDER_NAME,
       accessToken,
     });
-    targetCatId = created.id;
-    cache.categoryFolders[classification.category] = targetCatId;
-    saveXperterFolderCache(userKey, cache);
+    activeRootId = root.id;
   }
 
+  let activeCatId = catId;
+  if (!activeCatId) {
+    const createdCat = await findOrCreateDriveFolder({
+      name: classification.category,
+      parentId: activeRootId,
+      accessToken,
+    });
+    activeCatId = createdCat.id;
+  }
+
+  let activeSubId = subId;
+  if (isDoc && !activeSubId) {
+    const subName = classification.documentSubfolder!;
+    const createdSub = await findOrCreateDriveFolder({
+      name: subName,
+      parentId: activeCatId,
+      accessToken,
+    });
+    activeSubId = createdSub.id;
+  }
+
+  // Update cache incrementally
+  const updatedCache: XperterFolderCache = cache || {
+    rootFolderId: activeRootId,
+    rootFolderName: XPERTER_ROOT_FOLDER_NAME,
+    categoryFolders: {},
+    documentSubfolders: {},
+    lastUpdatedIso: new Date().toISOString(),
+  };
+  updatedCache.rootFolderId = activeRootId;
+  updatedCache.categoryFolders[classification.category] = activeCatId;
+  if (isDoc && activeSubId) {
+    updatedCache.documentSubfolders[classification.documentSubfolder!] =
+      activeSubId;
+  }
+  saveXperterFolderCache(userKey, updatedCache);
+
+  // Background non-blocking pre-warm of the rest of the hierarchy
+  initializeXperterDriveHierarchy({ userKey, accessToken }).catch(() => {});
+
   return {
-    folderId: targetCatId,
+    folderId: isDoc ? activeSubId! : activeCatId,
     folderPath: classification.folderPath,
   };
 }

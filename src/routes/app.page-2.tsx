@@ -307,10 +307,21 @@ function ProfilePage() {
   const [cloudFiles, setCloudFiles] = useState<CloudUploadedItem[]>(() =>
     loadCloudFiles(effectiveUid),
   );
+  const [cloudListFadingOut, setCloudListFadingOut] = useState<boolean>(false);
+  const cloudFadeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const cloudClearTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [uploadingCloudFiles, setUploadingCloudFiles] = useState<boolean>(false);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
   const cloudFolderInputRef = useRef<HTMLInputElement>(null);
+
+  // Clean up auto-fade timers on unmount
+  useEffect(() => {
+    return () => {
+      if (cloudFadeTimeoutRef.current) clearTimeout(cloudFadeTimeoutRef.current);
+      if (cloudClearTimeoutRef.current) clearTimeout(cloudClearTimeoutRef.current);
+    };
+  }, []);
 
   // Auto-initialize Xperter Drive hierarchy in background whenever connected
   useEffect(() => {
@@ -343,77 +354,101 @@ function ProfilePage() {
     toast.success(`Cloud folder renamed to "${clean}"`);
   };
 
-  // Generic cloud file and folder upload handler with automatic intelligent classification
+  // High-performance parallel upload handler with 5-second automatic fadeout
   const handleCloudFilesUpload = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
     setUploadingCloudFiles(true);
+    // Reset any previous fadeout timer
+    if (cloudFadeTimeoutRef.current) clearTimeout(cloudFadeTimeoutRef.current);
+    if (cloudClearTimeoutRef.current) clearTimeout(cloudClearTimeoutRef.current);
+    setCloudListFadingOut(false);
+
     try {
-      const newItems: CloudUploadedItem[] = [];
       const token = getDriveAccessToken();
 
-      for (const file of files) {
-        const relPath = (file as any).webkitRelativePath || file.name;
-        const classification = classifyFile(file.name, file.type);
-        let destinationPath = classification.folderPath;
-        let driveFileId: string | undefined;
-        let webViewLink: string | undefined;
+      // Parallel uploads across files for maximum throughput and speed
+      const newItems: CloudUploadedItem[] = await Promise.all(
+        files.map(async (file) => {
+          const relPath = (file as any).webkitRelativePath || file.name;
+          const classification = classifyFile(file.name, file.type);
+          let destinationPath = classification.folderPath;
+          let driveFileId: string | undefined;
+          let webViewLink: string | undefined;
 
-        const dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-          reader.onerror = () => resolve("");
-          reader.readAsDataURL(file);
-        });
-
-        if (driveConnected && token) {
-          try {
-            const driveResult = await uploadGenericFileToGoogleDrive({
-              file,
-              folderName: cloudFolderName,
-              relativePath: relPath,
-              accessToken: token,
-              userKey: effectiveUid || driveEmail || "default",
-            });
-            driveFileId = driveResult.driveFileId;
-            webViewLink = driveResult.webViewLink;
-            if (driveResult.folderPath) {
-              destinationPath = driveResult.folderPath;
+          if (driveConnected && token) {
+            try {
+              const driveResult = await uploadGenericFileToGoogleDrive({
+                file,
+                folderName: cloudFolderName,
+                relativePath: relPath,
+                accessToken: token,
+                userKey: effectiveUid || driveEmail || "default",
+              });
+              driveFileId = driveResult.driveFileId;
+              webViewLink = driveResult.webViewLink;
+              if (driveResult.folderPath) {
+                destinationPath = driveResult.folderPath;
+              }
+            } catch (driveErr) {
+              console.warn("Drive sync failed for file:", file.name, driveErr);
             }
-          } catch (driveErr) {
-            console.warn("Drive sync failed for file:", file.name, driveErr);
           }
-        }
 
-        newItems.push({
-          id: `cloud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name,
-          sizeBytes: file.size,
-          sizeFormatted: formatFileSize(file.size),
-          mimeType: file.type || classification.mimeType || "application/octet-stream",
-          folderName: classification.folderName,
-          folderPath: destinationPath,
-          category: classification.category,
-          documentSubfolder: classification.documentSubfolder,
-          relativePath: relPath,
-          driveFileId,
-          webViewLink,
-          uploadedAtIso: new Date().toISOString(),
-          dataUrl,
-          syncedToDrive: Boolean(driveFileId),
-        });
-      }
+          // Small files (<= 64KB) can have lightweight preview; larger files avoid heavy base64 freezing
+          let quickDataUrl: string | undefined;
+          if (file.size <= 64 * 1024) {
+            try {
+              quickDataUrl = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () =>
+                  resolve(typeof reader.result === "string" ? reader.result : "");
+                reader.onerror = () => resolve("");
+                reader.readAsDataURL(file);
+              });
+            } catch {}
+          }
 
-      const updated = [...newItems, ...cloudFiles];
-      setCloudFiles(updated);
-      saveCloudFiles(effectiveUid, updated);
+          return {
+            id: `cloud_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            name: file.name,
+            sizeBytes: file.size,
+            sizeFormatted: formatFileSize(file.size),
+            mimeType: file.type || classification.mimeType || "application/octet-stream",
+            folderName: classification.folderName,
+            folderPath: destinationPath,
+            category: classification.category,
+            documentSubfolder: classification.documentSubfolder,
+            relativePath: relPath,
+            driveFileId,
+            webViewLink,
+            uploadedAtIso: new Date().toISOString(),
+            dataUrl: quickDataUrl,
+            syncedToDrive: Boolean(driveFileId),
+          };
+        }),
+      );
+
+      setCloudFiles(newItems);
+      saveCloudFiles(effectiveUid, newItems);
 
       if (files.length === 1 && newItems[0]) {
         toast.success(`Uploaded "${newItems[0].name}" -> ${newItems[0].folderPath || "Xperter"}`);
       } else {
         toast.success(`Uploaded and organized ${files.length} items into Xperter`);
       }
+
+      // Automatically fade out smoothly after 4.3 seconds, then clear list completely at 5 seconds
+      cloudFadeTimeoutRef.current = setTimeout(() => {
+        setCloudListFadingOut(true);
+      }, 4300);
+
+      cloudClearTimeoutRef.current = setTimeout(() => {
+        setCloudFiles([]);
+        saveCloudFiles(effectiveUid, []);
+        setCloudListFadingOut(false);
+      }, 5000);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Cloud upload failed");
     } finally {
@@ -1460,14 +1495,28 @@ function ProfilePage() {
 
             {/* Cloud Uploaded Files List */}
             {cloudFiles.length > 0 && (
-              <div className="space-y-2.5 pt-2">
+              <div
+                className={`space-y-2.5 pt-2 transition-all duration-700 ease-out ${
+                  cloudListFadingOut
+                    ? "opacity-0 -translate-y-2 pointer-events-none scale-[0.98]"
+                    : "opacity-100 translate-y-0 scale-100"
+                }`}
+              >
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Organized Cloud Files ({cloudFiles.length})</span>
+                  <span className="flex items-center gap-1.5">
+                    <span>Organized Cloud Files ({cloudFiles.length})</span>
+                    <span className="text-[10px] text-muted-foreground/75 font-mono">
+                      (auto-clears in 5s)
+                    </span>
+                  </span>
                   <button
                     type="button"
                     onClick={() => {
+                      if (cloudFadeTimeoutRef.current) clearTimeout(cloudFadeTimeoutRef.current);
+                      if (cloudClearTimeoutRef.current) clearTimeout(cloudClearTimeoutRef.current);
                       setCloudFiles([]);
                       saveCloudFiles(effectiveUid, []);
+                      setCloudListFadingOut(false);
                       toast.success("Cloud upload list cleared");
                     }}
                     className="hover:text-destructive text-[11px]"
