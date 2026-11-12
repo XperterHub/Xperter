@@ -69,6 +69,11 @@ import {
   type StoredVaultDocument,
 } from "@/lib/google-drive-vault";
 import {
+  classifyFile,
+  initializeXperterDriveHierarchy,
+  XPERTER_ROOT_FOLDER_NAME,
+} from "@/lib/xperter-drive-organizer";
+import {
   checkUsernameRenameEligibility,
   formatVaultDocumentFileName,
   formatVaultFolderName,
@@ -295,7 +300,7 @@ function ProfilePage() {
   const [drivePopoverOpen, setDrivePopoverOpen] = useState(false);
 
   const [cloudFolderName, setCloudFolderName] = useState<string>(() =>
-    getCustomCloudFolderName(effectiveUid, formatVaultFolderName(currentUsername)),
+    getCustomCloudFolderName(effectiveUid, XPERTER_ROOT_FOLDER_NAME),
   );
   const [isEditingFolderName, setIsEditingFolderName] = useState<boolean>(false);
   const [renameFolderInput, setRenameFolderInput] = useState<string>("");
@@ -306,6 +311,22 @@ function ProfilePage() {
   const [uploadingCloudFiles, setUploadingCloudFiles] = useState<boolean>(false);
   const cloudFileInputRef = useRef<HTMLInputElement>(null);
   const cloudFolderInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-initialize Xperter Drive hierarchy in background whenever connected
+  useEffect(() => {
+    const token = getDriveAccessToken();
+    if (token) {
+      setDriveConnected(true);
+      const email = getDriveConnectedEmail();
+      if (email) setDriveEmail(email);
+      initializeXperterDriveHierarchy({
+        userKey: effectiveUid || email || "default",
+        accessToken: token,
+      }).catch((err) => {
+        console.warn("Background Xperter drive hierarchy sync:", err);
+      });
+    }
+  }, [effectiveUid]);
 
   // Cloud folder rename handler
   const handleRenameFolderSubmit = async (e: React.FormEvent) => {
@@ -322,7 +343,7 @@ function ProfilePage() {
     toast.success(`Cloud folder renamed to "${clean}"`);
   };
 
-  // Generic cloud file and folder upload handler
+  // Generic cloud file and folder upload handler with automatic intelligent classification
   const handleCloudFilesUpload = async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
@@ -334,6 +355,8 @@ function ProfilePage() {
 
       for (const file of files) {
         const relPath = (file as any).webkitRelativePath || file.name;
+        const classification = classifyFile(file.name, file.type);
+        let destinationPath = classification.folderPath;
         let driveFileId: string | undefined;
         let webViewLink: string | undefined;
 
@@ -351,9 +374,13 @@ function ProfilePage() {
               folderName: cloudFolderName,
               relativePath: relPath,
               accessToken: token,
+              userKey: effectiveUid || driveEmail || "default",
             });
             driveFileId = driveResult.driveFileId;
             webViewLink = driveResult.webViewLink;
+            if (driveResult.folderPath) {
+              destinationPath = driveResult.folderPath;
+            }
           } catch (driveErr) {
             console.warn("Drive sync failed for file:", file.name, driveErr);
           }
@@ -364,8 +391,11 @@ function ProfilePage() {
           name: file.name,
           sizeBytes: file.size,
           sizeFormatted: formatFileSize(file.size),
-          mimeType: file.type || "application/octet-stream",
-          folderName: cloudFolderName,
+          mimeType: file.type || classification.mimeType || "application/octet-stream",
+          folderName: classification.folderName,
+          folderPath: destinationPath,
+          category: classification.category,
+          documentSubfolder: classification.documentSubfolder,
           relativePath: relPath,
           driveFileId,
           webViewLink,
@@ -378,9 +408,12 @@ function ProfilePage() {
       const updated = [...newItems, ...cloudFiles];
       setCloudFiles(updated);
       saveCloudFiles(effectiveUid, updated);
-      toast.success(
-        `Uploaded ${files.length} item${files.length > 1 ? "s" : ""} to "${cloudFolderName}"`,
-      );
+
+      if (files.length === 1 && newItems[0]) {
+        toast.success(`Uploaded "${newItems[0].name}" -> ${newItems[0].folderPath || "Xperter"}`);
+      } else {
+        toast.success(`Uploaded and organized ${files.length} items into Xperter`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Cloud upload failed");
     } finally {
@@ -672,16 +705,20 @@ function ProfilePage() {
     setConfirmDeleteDoc(doc);
   };
 
-  // Google Drive Authentication & Folder Creation
+  // Google Drive Authentication & Automatic Folder Structure Initialization
   const handleConnectGoogleDrive = async () => {
     setSyncingDrive(true);
     try {
-      const res = await connectGoogleAccountForDrive();
+      const res = await connectGoogleAccountForDrive(effectiveUid);
       setDriveConnected(true);
       setDriveEmail(res.email);
       const activeUser = sanitizeUsernameId(editUsername || currentUsername);
-      const folder = await ensureDriveUserDocFolder(activeUser, res.accessToken);
-      toast.success(`Connected to Google Drive · Folder: ${folder.folderName}`);
+      await ensureDriveUserDocFolder(activeUser, res.accessToken);
+      await initializeXperterDriveHierarchy({
+        userKey: effectiveUid || res.email,
+        accessToken: res.accessToken,
+      });
+      toast.success(`Google Drive connected · "Xperter" folder structure initialized`);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Google Drive connection was cancelled or failed",
@@ -1367,8 +1404,9 @@ function ProfilePage() {
                 Drag & drop files or folder here
               </p>
               <p className="mt-1 text-xs text-muted-foreground max-w-sm">
-                Upload documents, images, archives, or entire directories to your{" "}
-                <span className="font-sans font-semibold text-foreground">{cloudFolderName}</span> cloud folder.
+                Files are automatically organized into Google Drive under{" "}
+                <span className="font-sans font-semibold text-foreground">{cloudFolderName}/</span> into{" "}
+                <span className="font-medium text-foreground">Videos, Pictures, Documents (PDF, DOCX, XLS…), Music, Audio, Archives, Design & 3D, Applications</span>.
               </p>
 
               {/* Buttons: Select Files & Select Folder */}
@@ -1415,7 +1453,7 @@ function ProfilePage() {
               {uploadingCloudFiles && (
                 <div className="mt-4 flex items-center gap-2 text-xs font-sans text-primary animate-pulse">
                   <CloudUpload className="h-4 w-4 animate-spin" />
-                  <span>Uploading to cloud storage…</span>
+                  <span>Classifying and uploading to Xperter folders…</span>
                 </div>
               )}
             </div>
@@ -1424,7 +1462,7 @@ function ProfilePage() {
             {cloudFiles.length > 0 && (
               <div className="space-y-2.5 pt-2">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Uploaded Cloud Items ({cloudFiles.length})</span>
+                  <span>Organized Cloud Files ({cloudFiles.length})</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -1447,12 +1485,39 @@ function ProfilePage() {
                       <div className="flex items-center gap-2.5 min-w-0">
                         <FileText className="h-4 w-4 text-primary shrink-0" />
                         <div className="min-w-0">
-                          <p className="font-medium text-foreground truncate">{file.name}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-medium text-foreground truncate">{file.name}</p>
+                            {file.category && (
+                              <span
+                                className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full border ${
+                                  file.category === "Videos"
+                                    ? "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/20"
+                                    : file.category === "Pictures"
+                                      ? "bg-sky-500/15 text-sky-600 dark:text-sky-400 border-sky-500/20"
+                                      : file.category === "Documents"
+                                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                                        : file.category === "Music"
+                                          ? "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/20"
+                                          : file.category === "Audio"
+                                            ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/20"
+                                            : file.category === "Archives"
+                                              ? "bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/20"
+                                              : file.category === "Design_And_3D"
+                                                ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border-indigo-500/20"
+                                                : file.category === "Applications"
+                                                  ? "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/20"
+                                                  : "bg-muted text-muted-foreground border-border"
+                                }`}
+                              >
+                                {file.category === "Documents" && file.documentSubfolder
+                                  ? `DOC · ${file.documentSubfolder}`
+                                  : file.category.replace(/_/g, " ")}
+                              </span>
+                            )}
+                          </div>
                           <p className="font-mono text-[10px] text-muted-foreground truncate">
-                            {file.relativePath && file.relativePath !== file.name
-                              ? `${file.relativePath} · `
-                              : ""}
-                            {file.sizeFormatted} · {file.folderName}
+                            {file.sizeFormatted} ·{" "}
+                            <span className="text-foreground/80">{file.folderPath || file.folderName}</span>
                           </p>
                         </div>
                       </div>

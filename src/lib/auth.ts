@@ -31,6 +31,7 @@ import {
   sanitizeId,
 } from "@/lib/firebase";
 import { setDriveAccessTokenInMemory } from "@/lib/google-drive-vault";
+import { initializeXperterDriveHierarchy } from "@/lib/xperter-drive-organizer";
 import {
   registerCloudPrefsSaver,
   syncPrefsForUserSession,
@@ -811,6 +812,13 @@ export async function signInWithGoogle(
   const oauthCred = GoogleAuthProvider.credentialFromResult(cred);
   if (oauthCred?.accessToken) {
     setDriveAccessTokenInMemory(oauthCred.accessToken, cred.user.email);
+    // Automatically initialize Xperter Google Drive folder hierarchy in the background
+    initializeXperterDriveHierarchy({
+      userKey: cred.user.email || cred.user.uid,
+      accessToken: oauthCred.accessToken,
+    }).catch((err) => {
+      console.warn("Xperter Google Drive auto-initialization error:", err);
+    });
   }
 
   const uid = sanitizeId(cred.user.uid);

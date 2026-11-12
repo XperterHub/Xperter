@@ -6,6 +6,14 @@ import {
   VAULT_DOCUMENT_TYPES,
   type VaultDocKey,
 } from "@/lib/username-id";
+import {
+  classifyFile,
+  initializeXperterDriveHierarchy,
+  uploadClassifiedFileToXperter,
+  XPERTER_ROOT_FOLDER_NAME,
+  type FileClassificationResult,
+  type XperterFolderCache,
+} from "@/lib/xperter-drive-organizer";
 
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 
@@ -248,11 +256,12 @@ export function formatFileSize(bytes: number): string {
  * Connects the user's Google account with the `https://www.googleapis.com/auth/drive.file` scope
  * and caches the OAuth access token in memory.
  */
-export async function connectGoogleAccountForDrive(): Promise<{
+export async function connectGoogleAccountForDrive(userKey?: string): Promise<{
   accessToken: string;
   email: string;
   displayName: string;
   photoURL: string;
+  folderCache?: XperterFolderCache;
 }> {
   const provider = new GoogleAuthProvider();
   provider.addScope(GOOGLE_DRIVE_SCOPE);
@@ -269,11 +278,23 @@ export async function connectGoogleAccountForDrive(): Promise<{
   cachedDriveAccessToken = token;
   cachedDriveUserEmail = result.user.email || null;
 
+  let folderCache: XperterFolderCache | undefined;
+  try {
+    const key = userKey || result.user.email || result.user.uid || "default";
+    folderCache = await initializeXperterDriveHierarchy({
+      userKey: key,
+      accessToken: token,
+    });
+  } catch (err) {
+    console.warn("Failed to initialize Xperter drive hierarchy on connect:", err);
+  }
+
   return {
     accessToken: token,
     email: result.user.email || "",
     displayName: result.user.displayName || "",
     photoURL: result.user.photoURL || "",
+    folderCache,
   };
 }
 
@@ -484,6 +505,9 @@ export interface CloudUploadedItem {
   sizeFormatted: string;
   mimeType: string;
   folderName: string;
+  folderPath?: string;
+  category?: string;
+  documentSubfolder?: string;
   relativePath?: string;
   driveFileId?: string;
   webViewLink?: string;
@@ -516,7 +540,7 @@ export function saveCloudFiles(uid: string, files: CloudUploadedItem[]): void {
   }
 }
 
-export function getCustomCloudFolderName(uid: string, fallback: string): string {
+export function getCustomCloudFolderName(uid: string, fallback = XPERTER_ROOT_FOLDER_NAME): string {
   const store = getSafeLocalStorage();
   const raw = store.getItem(`${CLOUD_FOLDER_PREFIX}${uid}`);
   return raw && raw.trim() ? raw.trim() : fallback;
@@ -532,18 +556,23 @@ export function setCustomCloudFolderName(uid: string, folderName: string): void 
 }
 
 /**
- * Uploads any generic file to Google Drive under a specific folder (supporting drag-and-drop and folder uploads).
+ * Uploads any generic file to Google Drive.
+ * When targeted to the "Xperter" folder, it automatically classifies the file
+ * and places it directly into the proper category and document subfolder.
  */
 export async function uploadGenericFileToGoogleDrive(params: {
   file: File;
-  folderName: string;
+  folderName?: string;
   relativePath?: string;
   accessToken?: string;
+  userKey?: string;
 }): Promise<{
   driveFileId: string;
   folderId: string;
   folderName: string;
+  folderPath: string;
   fileName: string;
+  classification?: FileClassificationResult;
   webViewLink?: string;
 }> {
   const token = params.accessToken || cachedDriveAccessToken;
@@ -551,16 +580,39 @@ export async function uploadGenericFileToGoogleDrive(params: {
     throw new Error("Connect your Google Account to upload files to Google Drive.");
   }
 
+  const effectiveFolderName = (params.folderName || XPERTER_ROOT_FOLDER_NAME).trim();
+
+  // If using the standard Xperter ecosystem, route through the intelligent classifier
+  if (effectiveFolderName === XPERTER_ROOT_FOLDER_NAME) {
+    const uploaded = await uploadClassifiedFileToXperter({
+      file: params.file,
+      userKey: params.userKey || cachedDriveUserEmail || "default",
+      accessToken: token,
+    });
+
+    return {
+      driveFileId: uploaded.driveFileId,
+      folderId: uploaded.folderId,
+      folderName: uploaded.classification.folderName,
+      folderPath: uploaded.folderPath,
+      fileName: uploaded.fileName,
+      classification: uploaded.classification,
+      ...(uploaded.webViewLink ? { webViewLink: uploaded.webViewLink } : {}),
+    };
+  }
+
+  // Fallback for custom named single folders
   const { folderId, folderName } = await ensureDriveUserDocFolder(
     "",
     token,
-    params.folderName,
+    effectiveFolderName,
   );
 
+  const classification = classifyFile(params.file.name, params.file.type);
   const metadata = {
     name: params.file.name,
     parents: [folderId],
-    description: `Uploaded via Lumen Cloud Uploading (${params.relativePath || params.file.name})`,
+    description: `Uploaded via Xperter Cloud Uploading (${params.relativePath || params.file.name})`,
   };
 
   const form = new FormData();
@@ -601,7 +653,9 @@ export async function uploadGenericFileToGoogleDrive(params: {
     driveFileId: uploaded.id,
     folderId,
     folderName,
+    folderPath: `${effectiveFolderName}/${params.file.name}`,
     fileName: uploaded.name || params.file.name,
+    classification,
     ...(uploaded.webViewLink ? { webViewLink: uploaded.webViewLink } : {}),
   };
 }
