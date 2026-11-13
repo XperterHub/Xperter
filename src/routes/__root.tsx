@@ -105,6 +105,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         src: "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2509450853164699",
         crossOrigin: "anonymous",
       },
+      {
+        async: true,
+        src: "https://cdn.ampproject.org/v0/amp-auto-ads-0.1.js",
+        "custom-element": "amp-auto-ads",
+      },
     ],
   }),
   shellComponent: RootShell,
@@ -123,9 +128,17 @@ function RootShell({ children }: { children: ReactNode }) {
           src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2509450853164699"
           crossOrigin="anonymous"
         />
+        {/* @ts-expect-error custom-element attribute for AMP auto ads */}
+        <script
+          async
+          custom-element="amp-auto-ads"
+          src="https://cdn.ampproject.org/v0/amp-auto-ads-0.1.js"
+        />
         <HeadContent />
       </head>
       <body>
+        {/* @ts-expect-error amp-auto-ads custom element */}
+        <amp-auto-ads type="adsense" data-ad-client="ca-pub-2509450853164699" />
         {children}
         <Scripts />
       </body>
