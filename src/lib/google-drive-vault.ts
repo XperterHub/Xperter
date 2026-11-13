@@ -17,6 +17,8 @@ import {
 
 export const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 export const DRIVE_AUTH_STORAGE_KEY = "xperter.drive.auth";
+export const DRIVE_CONNECTED_FLAG_KEY = "xperter.drive.connected";
+export const DRIVE_EMAIL_KEY = "xperter.drive.email";
 
 const inMemoryStore = new Map<string, string>();
 const memoryStorage: Storage = {
@@ -37,17 +39,49 @@ const memoryStorage: Storage = {
 };
 
 function getSafeLocalStorage(): Storage {
-  if (typeof window !== "undefined" && window.localStorage) {
-    return window.localStorage;
-  }
-  if (typeof globalThis !== "undefined" && (globalThis as any).localStorage) {
-    return (globalThis as any).localStorage as Storage;
-  }
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {}
+  try {
+    if (typeof globalThis !== "undefined" && (globalThis as any).localStorage) {
+      return (globalThis as any).localStorage as Storage;
+    }
+  } catch {}
   return memoryStorage;
 }
 
 let cachedDriveAccessToken: string | null = null;
 let cachedDriveUserEmail: string | null = null;
+
+export function isDriveConnected(): boolean {
+  if (cachedDriveAccessToken) return true;
+  const storage = getSafeLocalStorage();
+  try {
+    const raw = storage.getItem(DRIVE_AUTH_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.accessToken) {
+        cachedDriveAccessToken = parsed.accessToken;
+        if (parsed.email && !cachedDriveUserEmail) {
+          cachedDriveUserEmail = parsed.email;
+        }
+        return true;
+      }
+    }
+    if (storage.getItem(DRIVE_CONNECTED_FLAG_KEY) === "true") return true;
+  } catch {}
+
+  // If user is authenticated with Google, they already authorized Drive
+  if (
+    auth.currentUser?.email &&
+    auth.currentUser.providerData.some((p) => p.providerId === "google.com")
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export function getDriveAccessToken(): string | null {
   if (cachedDriveAccessToken) {
@@ -81,7 +115,18 @@ export function getDriveConnectedEmail(): string | null {
   }
   // Try restoring from storage
   getDriveAccessToken();
-  return cachedDriveUserEmail || auth.currentUser?.email || null;
+  if (cachedDriveUserEmail) {
+    return cachedDriveUserEmail;
+  }
+  const storage = getSafeLocalStorage();
+  try {
+    const savedEmail = storage.getItem(DRIVE_EMAIL_KEY);
+    if (savedEmail) {
+      cachedDriveUserEmail = savedEmail;
+      return savedEmail;
+    }
+  } catch {}
+  return auth.currentUser?.email || null;
 }
 
 export function setDriveAccessTokenInMemory(token: string | null, email?: string | null) {
@@ -101,12 +146,29 @@ export function setDriveAccessTokenInMemory(token: string | null, email?: string
             savedAt: Date.now(),
           }),
         );
+        storage.setItem(DRIVE_CONNECTED_FLAG_KEY, "true");
+        if (email || cachedDriveUserEmail) {
+          storage.setItem(DRIVE_EMAIL_KEY, email || cachedDriveUserEmail || "");
+        }
       } else {
         storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
       }
     } catch {
       // Ignore storage errors
     }
+  }
+}
+
+export function disconnectGoogleDrive(): void {
+  cachedDriveAccessToken = null;
+  cachedDriveUserEmail = null;
+  const storage = getSafeLocalStorage();
+  if (storage) {
+    try {
+      storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
+      storage.removeItem(DRIVE_CONNECTED_FLAG_KEY);
+      storage.removeItem(DRIVE_EMAIL_KEY);
+    } catch {}
   }
 }
 
@@ -312,7 +374,6 @@ export async function connectGoogleAccountForDrive(userKey?: string): Promise<{
 }> {
   const provider = new GoogleAuthProvider();
   provider.addScope(GOOGLE_DRIVE_SCOPE);
-  provider.setCustomParameters({ prompt: "consent" });
 
   const result = await signInWithPopup(auth, provider);
   const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -372,8 +433,12 @@ export async function ensureDriveUserDocFolder(
   );
 
   if (searchRes.status === 401 || searchRes.status === 403) {
-    setDriveAccessTokenInMemory(null, null);
-    throw new Error("Google Drive session expired or lacks permission. Please reconnect your Google Account.");
+    cachedDriveAccessToken = null;
+    const storage = getSafeLocalStorage();
+    try {
+      storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
+    } catch {}
+    throw new Error("Google Drive session expired. Please click Sync to refresh.");
   }
 
   if (!searchRes.ok) {
@@ -487,8 +552,12 @@ export async function uploadVaultDocumentToGoogleDrive(params: {
   );
 
   if (uploadRes.status === 401 || uploadRes.status === 403) {
-    setDriveAccessTokenInMemory(null, null);
-    throw new Error("Google Drive authorization expired. Please reconnect your Google Account.");
+    cachedDriveAccessToken = null;
+    const storage = getSafeLocalStorage();
+    try {
+      storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
+    } catch {}
+    throw new Error("Google Drive session expired. Please click Sync to refresh.");
   }
 
   if (!uploadRes.ok) {
@@ -680,8 +749,12 @@ export async function uploadGenericFileToGoogleDrive(params: {
   );
 
   if (uploadRes.status === 401 || uploadRes.status === 403) {
-    setDriveAccessTokenInMemory(null, null);
-    throw new Error("Google Drive authorization expired. Please reconnect your Google Account.");
+    cachedDriveAccessToken = null;
+    const storage = getSafeLocalStorage();
+    try {
+      storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
+    } catch {}
+    throw new Error("Google Drive session expired. Please click Sync to refresh.");
   }
 
   if (!uploadRes.ok) {

@@ -46,11 +46,13 @@ import {
   connectGoogleAccountForDrive,
   deleteVaultDocumentFromGoogleDrive,
   DRIVE_AUTH_STORAGE_KEY,
+  DRIVE_CONNECTED_FLAG_KEY,
   ensureDriveUserDocFolder,
   formatFileSize,
   getCustomCloudFolderName,
   getDriveAccessToken,
   getDriveConnectedEmail,
+  isDriveConnected,
   hasVaultPassword,
   loadCloudFiles,
   loadPersonalDetails,
@@ -294,7 +296,7 @@ function ProfilePage() {
 
   // Google Drive & Cloud Uploading state
   const [driveConnected, setDriveConnected] = useState<boolean>(() =>
-    Boolean(getDriveAccessToken()),
+    Boolean(isDriveConnected()),
   );
   const [driveEmail, setDriveEmail] = useState<string | null>(() => getDriveConnectedEmail());
   const [syncingDrive, setSyncingDrive] = useState(false);
@@ -327,12 +329,13 @@ function ProfilePage() {
   // Auto-initialize Xperter Drive hierarchy in background whenever connected
   useEffect(() => {
     const syncDriveStatus = () => {
-      const token = getDriveAccessToken();
-      const isConnected = Boolean(token);
+      const isConnected = isDriveConnected();
       setDriveConnected(isConnected);
-      if (isConnected && token) {
-        const email = getDriveConnectedEmail();
-        if (email) setDriveEmail(email);
+      const email = getDriveConnectedEmail() || user?.email || null;
+      if (email) setDriveEmail(email);
+
+      const token = getDriveAccessToken();
+      if (token) {
         initializeXperterDriveHierarchy({
           userKey: effectiveUid || email || "default",
           accessToken: token,
@@ -345,7 +348,7 @@ function ProfilePage() {
     syncDriveStatus();
 
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === DRIVE_AUTH_STORAGE_KEY) {
+      if (e.key === DRIVE_AUTH_STORAGE_KEY || e.key === DRIVE_CONNECTED_FLAG_KEY) {
         syncDriveStatus();
       }
     };
@@ -354,7 +357,7 @@ function ProfilePage() {
     return () => {
       window.removeEventListener("storage", handleStorage);
     };
-  }, [effectiveUid]);
+  }, [effectiveUid, user?.email]);
 
   // Cloud folder rename handler
   const handleRenameFolderSubmit = async (e: React.FormEvent) => {
@@ -1263,25 +1266,32 @@ function ProfilePage() {
           )}
         </GlassCard>
 
-        {/* Two-Column Grid: Cloud Uploading (Left) & Document Vault (Right) Side-by-Side */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch">
-          {/* LEFT: Cloud Uploading Card */}
-          <GlassCard variant="panel" padding="md" className="frost-panel flex flex-col justify-between space-y-4">
+        {/* Stacked Cards: Cloud Uploading & Document Vault One Below Another with Uniform Dimensions & Button Sizing */}
+        <div className="flex flex-col gap-6 w-full">
+          {/* 1. Cloud Uploading Card */}
+          <GlassCard variant="panel" padding="md" className="frost-panel flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6">
             {/* Header: Title "Cloud Uploading", status & icon */}
-            <div className="flex items-center gap-3">
-              <div className="bg-pearl flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-glass-edge">
-                <CloudUpload className="h-5 w-5 text-primary" />
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="bg-pearl flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
+                <CloudUpload className="h-5.5 w-5.5 text-primary" />
               </div>
               <div className="min-w-0">
-                <h2 className="text-base font-bold text-foreground tracking-tight">Cloud Uploading</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground tracking-tight">Cloud Uploading</h2>
+                  {driveConnected && (
+                    <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                      Connected
+                    </span>
+                  )}
+                </div>
                 <p className="font-mono text-xs text-muted-foreground truncate">
                   {driveConnected ? `Connected · ${driveEmail || "Google Drive"}` : "Sync with Google Drive"}
                 </p>
               </div>
             </div>
 
-            {/* Action Buttons: 1st Upload, right side Connect, right side Rename side-by-side with spacious arrangement */}
-            <div className="flex items-center gap-2.5 sm:gap-3 pt-1">
+            {/* Action Buttons: Uniform Size */}
+            <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap">
               <button
                 type="button"
                 onClick={() => {
@@ -1293,7 +1303,7 @@ function ProfilePage() {
                 }}
                 data-testid="open-cloud-upload-btn"
                 title={driveConnected ? "Upload files to Google Drive" : "Connect Google Drive to upload"}
-                className={`flex h-9.5 flex-1 items-center justify-center gap-1.5 rounded-full px-3 sm:px-4 text-xs font-semibold transition-all duration-300 ${
+                className={`flex h-9.5 min-w-[5.5rem] sm:min-w-[6.2rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-semibold transition-all duration-300 ${
                   driveConnected
                     ? "btn-ink liquid-press shadow-sm opacity-100 cursor-pointer"
                     : "bg-white/5 dark:bg-white/5 text-muted-foreground/35 border border-white/5 opacity-35 cursor-not-allowed select-none shadow-none"
@@ -1308,7 +1318,7 @@ function ProfilePage() {
                 onClick={handleConnectGoogleDrive}
                 disabled={syncingDrive}
                 data-testid="connect-google-drive-btn"
-                className="glass-pill liquid-press flex h-9.5 flex-1 items-center justify-center gap-1.5 rounded-full px-3 sm:px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
+                className="glass-pill liquid-press flex h-9.5 min-w-[5.5rem] sm:min-w-[6.2rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
               >
                 <HardDrive className={`h-3.5 w-3.5 ${syncingDrive ? "animate-spin" : ""}`} />
                 <span>{syncingDrive ? "Connecting…" : driveConnected ? "Sync" : "Connect"}</span>
@@ -1321,7 +1331,7 @@ function ProfilePage() {
                   setRenameFolderModalOpen(true);
                 }}
                 data-testid="rename-cloud-folder-btn"
-                className="glass-pill liquid-press flex h-9.5 flex-1 items-center justify-center gap-1.5 rounded-full px-3 sm:px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
+                className="glass-pill liquid-press flex h-9.5 min-w-[5.5rem] sm:min-w-[6.2rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
               >
                 <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
                 <span>Rename</span>
@@ -1329,41 +1339,39 @@ function ProfilePage() {
             </div>
           </GlassCard>
 
-          {/* RIGHT: Document Vault Card */}
-          <GlassCard variant="panel" padding="md" className="frost-panel flex flex-col justify-between space-y-4">
+          {/* 2. Document Vault Card */}
+          <GlassCard variant="panel" padding="md" className="frost-panel flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6">
             {/* Header: Document Vault, status badge & icon */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="bg-pearl flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-glass-edge">
-                  {secondaryVerified ? (
-                    <Unlock className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                  ) : (
-                    <FolderLock className="h-5 w-5 text-foreground" />
-                  )}
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="bg-pearl flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
+                {secondaryVerified ? (
+                  <Unlock className="h-5.5 w-5.5 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <FolderLock className="h-5.5 w-5.5 text-foreground" />
+                )}
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-foreground tracking-tight">Document Vault</h2>
+                  <span
+                    data-testid="vault-lock-status-badge"
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                      secondaryVerified
+                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    }`}
+                  >
+                    {secondaryVerified ? "Verified" : "Protected"}
+                  </span>
                 </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-base font-semibold text-foreground">Document Vault</h2>
-                    <span
-                      data-testid="vault-lock-status-badge"
-                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
-                        secondaryVerified
-                          ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                          : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
-                      }`}
-                    >
-                      {secondaryVerified ? "Verified" : "Protected"}
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground truncate">
-                    Encrypted Personal & Government IDs
-                  </p>
-                </div>
+                <p className="text-xs text-muted-foreground truncate">
+                  Encrypted Personal & Government IDs
+                </p>
               </div>
             </div>
 
-            {/* Action Buttons: Unlock Vault (or Open Vault and Lock) side-by-side with spacious arrangement */}
-            <div className="flex items-center gap-2.5 sm:gap-3 pt-1">
+            {/* Action Buttons: Uniform Size */}
+            <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap">
               {!secondaryVerified ? (
                 <button
                   type="button"
@@ -1376,7 +1384,7 @@ function ProfilePage() {
                     }
                   }}
                   data-testid="unlock-vault-btn"
-                  className="btn-ink liquid-press flex h-9.5 flex-1 items-center justify-center gap-2 rounded-full px-4 text-xs font-semibold shadow-sm"
+                  className="btn-ink liquid-press flex h-9.5 min-w-[8.5rem] items-center justify-center gap-2 rounded-full px-5 text-xs font-semibold shadow-sm"
                 >
                   <Unlock className="h-3.5 w-3.5" />
                   <span>Unlock Vault</span>
@@ -1387,7 +1395,7 @@ function ProfilePage() {
                     type="button"
                     onClick={() => setVaultModalOpen(true)}
                     data-testid="open-vault-modal-btn"
-                    className="btn-ink liquid-press flex h-9.5 flex-1 items-center justify-center gap-2 rounded-full px-4 text-xs font-semibold shadow-sm"
+                    className="btn-ink liquid-press flex h-9.5 min-w-[7rem] items-center justify-center gap-2 rounded-full px-4 text-xs font-semibold shadow-sm"
                   >
                     <FolderLock className="h-3.5 w-3.5" />
                     <span>Open Vault</span>
@@ -1400,7 +1408,7 @@ function ProfilePage() {
                       toast.success("Document Vault locked");
                     }}
                     data-testid="lock-vault-btn"
-                    className="glass-pill liquid-press flex h-9.5 items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
+                    className="glass-pill liquid-press flex h-9.5 min-w-[6rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
                   >
                     <Lock className="h-3.5 w-3.5" />
                     <span>Lock</span>
