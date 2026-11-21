@@ -790,7 +790,7 @@ function CloudupPage() {
                     </span>
                   )}
                 </div>
-                <p className="font-mono text-xs text-muted-foreground truncate">
+                <p className="text-xs text-muted-foreground truncate">
                   {driveConnected ? `Connected · ${driveEmail || "Google Drive"}` : "Sync with Google Drive"}
                 </p>
               </div>
@@ -941,7 +941,7 @@ function CloudupPage() {
                   <Dialog.Title className="text-base font-bold text-foreground tracking-tight">
                     Cloud Uploading
                   </Dialog.Title>
-                  <p className="font-mono text-xs text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     {driveConnected ? `Connected · ${driveEmail || "Google Drive"}` : "Sync with Google Drive"}
                   </p>
                 </div>
@@ -1047,7 +1047,7 @@ function CloudupPage() {
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="flex items-center gap-1.5">
                     <span>Organized Cloud Files ({cloudFiles.length})</span>
-                    <span className="text-[10px] text-muted-foreground/75 font-mono">
+                    <span className="text-[10px] text-muted-foreground/75">
                       (auto-clears in 5s)
                     </span>
                   </span>
@@ -1106,7 +1106,7 @@ function CloudupPage() {
                               </span>
                             )}
                           </div>
-                          <p className="font-mono text-[10px] text-muted-foreground truncate">
+                          <p className="text-[10px] text-muted-foreground truncate">
                             {file.sizeFormatted} ·{" "}
                             <span className="text-foreground/80">{file.folderPath || file.folderName}</span>
                           </p>
@@ -1835,7 +1835,7 @@ function CloudupPage() {
                   )}
                 </div>
 
-                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground font-mono">
+                <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
                   <span>Drive: {driveFolderName}/{viewingDoc.renamedFileName}</span>
                   <span>Size: {viewingDoc.sizeFormatted}</span>
                 </div>
@@ -1861,7 +1861,7 @@ function CloudupPage() {
                     <Dialog.Title className="text-base font-semibold text-foreground">
                       {activeUploadDef.label}
                     </Dialog.Title>
-                    <Dialog.Description id="upload-doc-desc" className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                    <Dialog.Description id="upload-doc-desc" className="mt-0.5 text-[11px] text-muted-foreground">
                       {
                         formatVaultDocumentFileName(
                           currentUsername,

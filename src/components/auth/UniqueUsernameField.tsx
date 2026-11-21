@@ -113,7 +113,7 @@ export function UniqueUsernameField({
           onChange={(e) => onChange(e.target.value)}
           placeholder="Enter username ID"
           aria-label="Username ID"
-          className="w-full min-w-0 bg-transparent font-mono text-xs outline-none placeholder:font-sans placeholder:text-muted-foreground"
+          className="w-full min-w-0 bg-transparent text-xs font-medium text-foreground outline-none placeholder:font-normal placeholder:text-muted-foreground"
         />
         {checking ? (
           <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -140,7 +140,7 @@ export function UniqueUsernameField({
         >
           <div className="flex items-center justify-between">
             <span
-              className={`font-mono text-xs font-medium lowercase tracking-wide transition-colors duration-200 ${
+              className={`text-xs font-medium lowercase tracking-wide transition-colors duration-200 ${
                 status.available
                   ? "text-emerald-500 dark:text-emerald-400"
                   : "text-rose-500 dark:text-rose-400"
@@ -159,7 +159,7 @@ export function UniqueUsernameField({
                   type="button"
                   onClick={() => onChange(sug)}
                   data-testid={`username-suggestion-${sug}`}
-                  className="glass-pill liquid-press rounded-full px-2 py-0.5 font-mono text-[11px] text-foreground transition-colors hover:bg-glass-strong"
+                  className="glass-pill liquid-press rounded-full px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-glass-strong"
                 >
                   {sug}
                 </button>

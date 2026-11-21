@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { ArrowLeft, LogOut, MessageSquare, ShieldCheck } from "lucide-react";
+import { ArrowLeft, LogOut } from "lucide-react";
 import { toast } from "sonner";
 import { SilkBackground } from "@/components/SilkBackground";
 import { ProfileCard } from "@/components/profile/ProfileCard";
@@ -49,11 +49,16 @@ function Welcome() {
     <main className="relative flex min-h-dvh flex-col items-center justify-center px-4 py-8 sm:px-6 sm:py-12 text-foreground">
       <SilkBackground />
 
-      {/* Top action bar */}
-      <div className="mb-4 flex w-full max-w-2xl items-center justify-between">
+      {/* Centered Profile Card */}
+      <div className="w-full max-w-2xl animate-liquid">
+        <ProfileCard />
+      </div>
+
+      {/* Neatly aligned controls directly below the profile card */}
+      <div className="mt-5 flex w-full max-w-2xl items-center justify-between px-1">
         <Link
           to="/app/messages"
-          className="glass-pill liquid-press inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge shadow-sm"
+          className="glass-pill liquid-press inline-flex h-10 items-center gap-2 rounded-full px-5 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge shadow-sm"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           <span>Back to Workspace</span>
@@ -61,34 +66,11 @@ function Welcome() {
         <button
           type="button"
           onClick={handleSignOut}
-          className="glass-pill liquid-press inline-flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium text-muted-foreground hover:text-destructive border border-glass-edge shadow-sm transition-colors"
+          className="glass-pill liquid-press inline-flex h-10 items-center gap-2 rounded-full px-4.5 text-xs font-medium text-muted-foreground hover:text-destructive border border-glass-edge shadow-sm transition-colors"
         >
           <LogOut className="h-3.5 w-3.5" />
           <span>Sign out</span>
         </button>
-      </div>
-
-      {/* Shifted Profile Component (from Screenshot 1) */}
-      <div className="w-full max-w-2xl animate-liquid">
-        <ProfileCard />
-      </div>
-
-      {/* Quick Jump Bar */}
-      <div className="mt-4 flex w-full max-w-2xl flex-wrap items-center justify-center gap-3">
-        <Link
-          to="/app/page-2"
-          className="glass-pill liquid-press inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge shadow-xs"
-        >
-          <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-          <span>Open Cloudup &amp; Document Vault</span>
-        </Link>
-        <Link
-          to="/app/messages"
-          className="btn-ink liquid-press inline-flex items-center gap-2 rounded-full px-5 py-2 text-xs font-semibold shadow-xs"
-        >
-          <MessageSquare className="h-3.5 w-3.5" />
-          <span>Messages Workspace</span>
-        </Link>
       </div>
     </main>
   );

@@ -309,7 +309,7 @@ export function ProfileCard({ className = "" }: { className?: string }) {
           <h1 className="text-lg font-bold text-foreground tracking-tight sm:text-xl">
             {editName || "User"}
           </h1>
-          <p className="font-mono text-xs text-muted-foreground">
+          <p className="text-xs font-medium text-muted-foreground">
             @{editUsername || "username"}
           </p>
           {/* Clean About display in view mode */}
@@ -323,14 +323,14 @@ export function ProfileCard({ className = "" }: { className?: string }) {
         {/* Real Counters Strip: Friends & Posts (Real calculated numbers, no fake datas) */}
         <div className="mt-4 flex items-center justify-center gap-8 rounded-2xl border border-glass-edge bg-glass/40 px-8 py-2.5 text-center shadow-xs">
           <div>
-            <span className="block text-base font-bold text-foreground font-mono">
+            <span className="block text-base font-semibold text-foreground">
               {realStats.friendsCount}
             </span>
             <span className="text-[11px] font-medium text-muted-foreground">Friends</span>
           </div>
           <div className="h-6 w-px bg-glass-edge" />
           <div>
-            <span className="block text-base font-bold text-foreground font-mono">
+            <span className="block text-base font-semibold text-foreground">
               {realStats.postsCount}
             </span>
             <span className="text-[11px] font-medium text-muted-foreground">Posts</span>
@@ -411,8 +411,8 @@ export function ProfileCard({ className = "" }: { className?: string }) {
                   <strong
                     className={
                       renameEligibility.renamesRemaining === 0
-                        ? "font-mono font-bold text-rose-500"
-                        : "font-mono font-bold text-emerald-500"
+                        ? "font-semibold text-rose-500"
+                        : "font-semibold text-emerald-500"
                     }
                   >
                     {renameEligibility.renamesRemaining} of {renameEligibility.totalAllowed}
@@ -420,7 +420,7 @@ export function ProfileCard({ className = "" }: { className?: string }) {
                   (2-week period)
                 </span>
                 {renameEligibility.daysUntilNextReset && renameEligibility.renamesRemaining < 3 && (
-                  <span className="font-mono text-[10px] text-muted-foreground">
+                  <span className="text-[10px] font-medium text-muted-foreground">
                     Resets in {renameEligibility.daysUntilNextReset}d
                   </span>
                 )}
@@ -433,7 +433,7 @@ export function ProfileCard({ className = "" }: { className?: string }) {
                 <Mail className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <span className="block text-[11px] text-muted-foreground">Account Email</span>
-                  <span className="font-mono text-xs text-foreground truncate max-w-[220px]">
+                  <span className="text-xs font-medium text-foreground truncate max-w-[220px]">
                     {currentEmail}
                   </span>
                 </div>
@@ -479,16 +479,16 @@ export function ProfileCard({ className = "" }: { className?: string }) {
             <div className="flex items-center justify-between border-b border-glass-edge/50 pb-2.5 text-xs">
               <div>
                 <span className="text-muted-foreground">Username ID</span>
-                <div className="text-[10px] text-muted-foreground font-mono">
+                <div className="text-[10px] text-muted-foreground">
                   {renameEligibility.renamesRemaining} of {renameEligibility.totalAllowed} renames left (2w)
                 </div>
               </div>
-              <span className="font-mono font-medium text-foreground">@{editUsername || currentUsername}</span>
+              <span className="font-medium text-foreground">@{editUsername || currentUsername}</span>
             </div>
             <div className="flex items-center justify-between text-xs pt-0.5">
               <span className="text-muted-foreground">Account Email</span>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-foreground">{currentEmail}</span>
+                <span className="font-medium text-foreground">{currentEmail}</span>
                 <button
                   type="button"
                   onClick={() => {
