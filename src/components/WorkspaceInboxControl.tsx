@@ -709,7 +709,7 @@ export function WorkspaceInboxControl({
                             className="glass-pill liquid-press inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium text-foreground hover:bg-glass-strong"
                           >
                             <ShieldCheck className="h-3 w-3" />
-                            <span>Open Profile &amp; Vault</span>
+                            <span>Open Cloudup &amp; Vault</span>
                           </button>
                         )}
 
@@ -758,7 +758,7 @@ export function WorkspaceInboxControl({
                 }}
                 className="font-medium text-foreground hover:underline"
               >
-                Manage Profile &amp; Vault →
+                Manage Cloudup &amp; Vault →
               </button>
             </div>
           </div>

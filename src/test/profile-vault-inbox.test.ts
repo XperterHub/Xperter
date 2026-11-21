@@ -21,10 +21,10 @@ import {
 } from "@/lib/username-id";
 
 describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
-  it("renames Page 2 to Profile and marks it live in APP_PAGES", () => {
+  it("renames Page 2 to Cloudup and marks it live in APP_PAGES", () => {
     const page2 = APP_PAGES.find((p) => p.to === "/app/page-2");
     expect(page2).toBeDefined();
-    expect(page2?.label).toBe("Profile");
+    expect(page2?.label).toBe("Cloudup");
     expect(page2?.live).toBe(true);
   });
 
