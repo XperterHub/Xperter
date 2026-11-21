@@ -158,10 +158,6 @@ function CloudupPage() {
     loadVaultDocuments(effectiveUid, currentUsername),
   );
 
-  // Real stats calculation (Friends and Posts)
-  const realStats = useMemo(() => {
-    return computeRealUserStats(effectiveUid);
-  }, [effectiveUid, user?.uid]);
 
   // Google Drive & Cloud Uploading state
   const [driveConnected, setDriveConnected] = useState<boolean>(() =>

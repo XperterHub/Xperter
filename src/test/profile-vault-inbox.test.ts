@@ -306,6 +306,24 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(getDriveAccessToken()).toBeNull();
     expect(window.localStorage.getItem(DRIVE_AUTH_STORAGE_KEY)).toBeNull();
   });
+
+  it("renders CloudupPage component without crashing", async () => {
+    const React = await import("react");
+    const { Route } = await import("@/routes/app.page-2");
+    const CloudupComp = Route.options.component;
+    expect(CloudupComp).toBeDefined();
+    const { render } = await import("@testing-library/react");
+    const { getByTestId } = render(React.createElement(CloudupComp!));
+    expect(getByTestId("cloudup-page-root")).toBeDefined();
+  });
+
+  it("renders ProfileCard component without crashing", async () => {
+    const React = await import("react");
+    const { ProfileCard } = await import("@/components/profile/ProfileCard");
+    const { render } = await import("@testing-library/react");
+    const { container } = render(React.createElement(ProfileCard));
+    expect(container).toBeDefined();
+  });
 });
 
 
