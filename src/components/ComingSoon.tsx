@@ -1,6 +1,12 @@
+import { useEffect, useRef, useState } from "react";
+import gsap from "gsap";
 import { GlassCard } from "@/components/GlassCard";
+import { SectionLoadingBar } from "@/components/SectionLoadingBar";
 import { ChromeGlyph } from "@/components/three/ChromeGlyph";
 import type { GlyphKind } from "@/components/three/ChromeScene";
+import { GLYPH_IMAGES } from "@/lib/config";
+
+const loadedSectionsCache = new Set<string>();
 
 export function ComingSoon({
   kind,
@@ -11,6 +17,58 @@ export function ComingSoon({
   name: string;
   index: string;
 }) {
+  const sectionKey = `${index}-${kind}`;
+  const alreadyLoaded = loadedSectionsCache.has(sectionKey);
+  const [revealKey, setRevealKey] = useState<string | null>(alreadyLoaded ? sectionKey : null);
+  const [unmountedKey, setUnmountedKey] = useState<string | null>(alreadyLoaded ? sectionKey : null);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const isRevealing = revealKey === sectionKey;
+  const isLoaderMounted = unmountedKey !== sectionKey;
+
+  useEffect(() => {
+    if (loadedSectionsCache.has(sectionKey)) {
+      setRevealKey(sectionKey);
+      setUnmountedKey(sectionKey);
+    } else {
+      setRevealKey(null);
+      setUnmountedKey(null);
+    }
+  }, [sectionKey]);
+
+  useEffect(() => {
+    const contentEl = contentRef.current;
+    if (!contentEl) return;
+
+    if (!isRevealing) {
+      gsap.set(contentEl, {
+        opacity: 0,
+        y: 10,
+      });
+      return;
+    }
+
+    const ctx = gsap.context(() => {
+      gsap.fromTo(
+        contentEl,
+        {
+          opacity: 0,
+          y: 10,
+        },
+        {
+          opacity: 1,
+          y: 0,
+          duration: 0.52,
+          ease: "sine.out",
+        },
+      );
+    }, contentEl);
+
+    return () => {
+      ctx.revert();
+    };
+  }, [isRevealing]);
+
   return (
     <GlassCard
       as="section"
@@ -22,9 +80,27 @@ export function ComingSoon({
         {index} — {name}
       </span>
 
+      {isLoaderMounted && (
+        <SectionLoadingBar
+          key={sectionKey}
+          glyphSrc={GLYPH_IMAGES[kind]}
+          label={name}
+          onFadeOutStart={() => setRevealKey(sectionKey)}
+          onComplete={() => {
+            loadedSectionsCache.add(sectionKey);
+            setRevealKey(sectionKey);
+            setUnmountedKey(sectionKey);
+          }}
+        />
+      )}
+
       <div
+        ref={contentRef}
+        aria-hidden={!isRevealing}
         data-testid="section-loaded-content"
-        className="flex w-full flex-col items-center justify-center"
+        className={`flex w-full flex-col items-center justify-center ${
+          isRevealing ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
       >
         <ChromeGlyph
           kind={kind}

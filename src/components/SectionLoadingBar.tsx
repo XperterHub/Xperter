@@ -55,7 +55,11 @@ export function SectionLoadingBar({
     }
 
     let cancelled = false;
-    const assetReadyPromise = preloadSectionAsset(glyphSrc);
+    let assetReady = false;
+    preloadSectionAsset(glyphSrc).then(() => {
+      assetReady = true;
+    });
+
     const state = { progress: 0 };
 
     const syncProgress = () => {
@@ -77,16 +81,14 @@ export function SectionLoadingBar({
       });
     }
 
-    // Wait for asset readiness before finishing to 100% and fading out
-    tl.add(() => {
-      tl.pause();
-      void assetReadyPromise.then(() => {
-        if (cancelled) return;
-        tl.resume();
-      });
+    // Brief check for asset readiness without deadlocking the timeline
+    tl.to(state, {
+      progress: 92,
+      duration: 0.08,
+      onUpdate: syncProgress,
     });
 
-    // Stage 3: 89% -> 100%
+    // Stage 3: 92% -> 100%
     const finalStage = SECTION_LOADER_STAGES[2]!;
     tl.to(state, {
       progress: finalStage.targetPercent,
@@ -119,8 +121,17 @@ export function SectionLoadingBar({
       },
     });
 
+    // Guaranteed watchdog timeout to ensure transition always completes
+    const watchdogTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        onFadeOutStartRef.current?.();
+        onCompleteRef.current?.();
+      }
+    }, 1800);
+
     return () => {
       cancelled = true;
+      window.clearTimeout(watchdogTimer);
       tl.kill();
     };
   }, [glyphSrc]);

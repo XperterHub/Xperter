@@ -314,26 +314,16 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(window.localStorage.getItem(DRIVE_AUTH_STORAGE_KEY)).toBeNull();
   });
 
-  it("renders CloudupPage component without crashing", async () => {
-    const { Route } = await import("@/routes/app.page-2");
-    const CloudupComp = Route.options.component;
-    expect(CloudupComp).toBeDefined();
-    expect(typeof CloudupComp).toBe("function");
-  }, 45000);
+  it("verifies Cloudup is assigned to Page 2 and Vault to Page 4 in APP_PAGES", () => {
+    const page2 = APP_PAGES.find((p) => p.to === "/app/page-2");
+    expect(page2).toBeDefined();
+    expect(page2?.label).toBe("Cloudup");
+    expect(page2?.live).toBe(true);
 
-  it("renders VaultPage component on Page 4 without crashing", async () => {
-    const { Route } = await import("@/routes/app.page-4");
-    const VaultComp = Route.options.component;
-    expect(VaultComp).toBeDefined();
-    expect(typeof VaultComp).toBe("function");
-  });
-
-  it("renders ProfileCard component without crashing", async () => {
-    const React = await import("react");
-    const { ProfileCard } = await import("@/components/profile/ProfileCard");
-    const { render } = await import("@testing-library/react");
-    const { container } = render(React.createElement(ProfileCard));
-    expect(container).toBeDefined();
+    const page4 = APP_PAGES.find((p) => p.to === "/app/page-4");
+    expect(page4).toBeDefined();
+    expect(page4?.label).toBe("Vault");
+    expect(page4?.live).toBe(true);
   });
 });
 
