@@ -191,7 +191,7 @@
 
 @utility glass {
   background:
-    radial-gradient(420px circle at var(--mx, 30%) var(--my, -20%), var(--glass-sheen), transparent 45%),
+    radial-gradient(420px circle at 30% -20%, var(--glass-sheen), transparent 45%),
     linear-gradient(
       140deg,
       color-mix(in oklab, var(--glass-body) calc((var(--glass-alpha, 0.38) + var(--glass-alpha-add)) * 100%), transparent),
@@ -241,7 +241,7 @@
 @utility frost-panel {
   --glass-alpha: 0.64;
   background:
-    radial-gradient(820px circle at var(--mx, 35%) var(--my, -10%), var(--glass-sheen), transparent 58%),
+    radial-gradient(820px circle at 35% -10%, var(--glass-sheen), transparent 58%),
     linear-gradient(
       140deg,
       color-mix(in oklab, var(--glass-body) calc((var(--glass-alpha, 0.64) + var(--glass-alpha-add)) * 100%), transparent),

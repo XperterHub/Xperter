@@ -95,10 +95,6 @@ export default function ChromeScene({
 
       xLens(nx * (isHero ? 14 : 8));
       yLens(ny * (isHero ? 14 : 8));
-
-      const lr = lens.getBoundingClientRect();
-      lens.style.setProperty("--mx", `${e.clientX - lr.left}px`);
-      lens.style.setProperty("--my", `${e.clientY - lr.top}px`);
     };
 
     const onLeave = () => {
