@@ -28,6 +28,13 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(page2?.live).toBe(true);
   });
 
+  it("renames Page 4 to Vault and marks it live in APP_PAGES", () => {
+    const page4 = APP_PAGES.find((p) => p.to === "/app/page-4");
+    expect(page4).toBeDefined();
+    expect(page4?.label).toBe("Vault");
+    expect(page4?.live).toBe(true);
+  });
+
   it("formats Google Drive vault folder as <username>_doc and auto-renames documents", () => {
     expect(formatVaultFolderName("Nagaraj_98")).toBe("nagaraj_98_doc");
     expect(formatVaultFolderName("LMN-NAGARAJ")).toBe("nagaraj_doc");
@@ -313,6 +320,13 @@ describe("Page 2 Profile & Document Vault + Unique Username Logic", () => {
     expect(CloudupComp).toBeDefined();
     expect(typeof CloudupComp).toBe("function");
   }, 45000);
+
+  it("renders VaultPage component on Page 4 without crashing", async () => {
+    const { Route } = await import("@/routes/app.page-4");
+    const VaultComp = Route.options.component;
+    expect(VaultComp).toBeDefined();
+    expect(typeof VaultComp).toBe("function");
+  });
 
   it("renders ProfileCard component without crashing", async () => {
     const React = await import("react");
