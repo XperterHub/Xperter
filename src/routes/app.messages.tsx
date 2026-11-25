@@ -3420,7 +3420,7 @@ function Messages() {
                           placeholder="e.g. LMN-CYXEJ4 or username"
                           aria-label="Friend's User ID or username"
                           autoFocus
-                          className="glass-input h-12 w-full rounded-2xl pl-11 pr-10 text-sm font-mono outline-none ring-1 ring-emerald-500/35 transition-all focus:ring-emerald-500/80 placeholder:font-sans placeholder:text-muted-foreground/60 shadow-inner"
+                          className="glass-input h-12 w-full rounded-2xl pl-11 pr-10 text-sm font-sans outline-none ring-1 ring-emerald-500/35 transition-all focus:ring-emerald-500/80 placeholder:font-sans placeholder:text-muted-foreground/60 shadow-inner"
                         />
                         {friendTargetId && (
                           <button
@@ -3470,7 +3470,7 @@ function Messages() {
                                     <p className="truncate text-sm font-semibold text-foreground">
                                       {target.displayName}
                                     </p>
-                                    <p className="truncate font-mono text-xs text-muted-foreground">
+                                    <p className="truncate font-sans text-xs text-muted-foreground">
                                       {target.handle?.startsWith("@") ? target.handle : `@${target.lumenId}`}
                                     </p>
                                   </div>
@@ -3642,7 +3642,7 @@ function Messages() {
                               >
                                 <div className="min-w-0">
                                   <p className="truncate text-sm font-medium text-foreground">{req.fromName}</p>
-                                  <p className="truncate font-mono text-xs text-muted-foreground">@{req.fromLumenId}</p>
+                                  <p className="truncate font-sans text-xs text-muted-foreground">@{req.fromLumenId}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <button
@@ -4769,7 +4769,7 @@ function Messages() {
               </div>
               {active.peerLumenId && (
                 <div className="mt-1 flex items-center gap-2 rounded-full bg-glass px-3 py-1 text-xs">
-                  <span className="font-mono">{active.peerLumenId}</span>
+                  <span className="font-sans font-medium">{active.peerLumenId}</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -4914,7 +4914,7 @@ function IncomingCallModal({
           <DialogTitle className="text-xl font-medium tracking-tight">
             {call.callerName}
           </DialogTitle>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">
+          <p className="mt-1 font-sans text-xs text-muted-foreground">
             {call.callerLumenId ? `ID: ${call.callerLumenId}` : "Incoming call"}
           </p>
           <DialogDescription className="mt-2 text-xs font-medium text-chart-2 animate-pulse">

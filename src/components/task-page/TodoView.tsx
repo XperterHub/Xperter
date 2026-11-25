@@ -387,7 +387,7 @@ export function TodoView() {
   }, [todos, filter, priorityFilter, sortBy]);
 
   return (
-    <div className="relative flex h-full flex-col overflow-y-auto overflow-x-hidden px-3.5 pb-6 pt-16 sm:px-6 sm:pt-16 md:p-6 lg:p-8 lg:pl-20">
+    <div className="relative flex h-full flex-col overflow-y-auto overflow-x-hidden px-4 pb-8 pt-16 sm:px-6 sm:pt-16 md:px-8 md:pt-16 lg:pl-20 lg:pr-8 lg:pt-8">
       <div className="mx-auto w-full max-w-4xl">
         {/* Sleek, Theme-Harmonious Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

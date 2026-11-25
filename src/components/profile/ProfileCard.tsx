@@ -428,12 +428,12 @@ export function ProfileCard({ className = "" }: { className?: string }) {
             </div>
 
             {/* Account Email */}
-            <div className="flex items-center justify-between rounded-xl border border-glass-edge bg-glass/40 px-3.5 py-2.5 text-xs">
-              <div className="flex items-center gap-2.5">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <div>
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-glass-edge bg-glass/40 px-3.5 py-2.5 text-xs">
+              <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
                   <span className="block text-[11px] text-muted-foreground">Account Email</span>
-                  <span className="text-xs font-medium text-foreground truncate max-w-[220px]">
+                  <span className="block truncate text-xs font-medium text-foreground">
                     {currentEmail}
                   </span>
                 </div>
@@ -445,7 +445,7 @@ export function ProfileCard({ className = "" }: { className?: string }) {
                   toast.success("Email copied to clipboard");
                 }}
                 title="Copy email"
-                className="glass-pill liquid-press rounded-full p-1.5 text-muted-foreground hover:text-foreground"
+                className="glass-pill liquid-press shrink-0 rounded-full p-1.5 text-muted-foreground hover:text-foreground"
               >
                 <Copy className="h-3.5 w-3.5" />
               </button>

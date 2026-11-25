@@ -327,24 +327,37 @@ function CloudupPage() {
     if (!driveConnected || !storageQuota) {
       return null;
     }
-    const usedFormatted = formatStorageQuotaBytes(storageQuota.usageBytes);
+    const usedValue = formatStorageQuotaBytes(storageQuota.usageBytes);
+    const inDriveValue = formatStorageQuotaBytes(storageQuota.usageInDriveBytes);
+    const trashValue = formatStorageQuotaBytes(storageQuota.usageInDriveTrashBytes);
+
     if (storageQuota.isUnlimited || storageQuota.limitBytes === null) {
       return {
-        totalLabel: "Unlimited Cloud Storage",
-        usedLabel: `${usedFormatted} Used`,
-        freeLabel: "Unlimited",
-        pct: 10,
-        pctLabel: "Enterprise / Education tier",
+        totalValue: "Unlimited",
+        totalLabel: "Unlimited Plan",
+        usedValue,
+        freeValue: "Unlimited",
+        inDriveValue,
+        trashValue,
+        pct: 8,
+        pctLabel: "Unlimited",
       };
     }
-    const totalFormatted = formatStorageQuotaBytes(storageQuota.limitBytes);
+
+    const totalValue = formatStorageQuotaBytes(storageQuota.limitBytes);
     const freeBytes = Math.max(0, storageQuota.limitBytes - storageQuota.usageBytes);
-    const freeFormatted = formatStorageQuotaBytes(freeBytes);
-    const pct = storageQuota.percentUsed ?? Math.min(100, Math.round((storageQuota.usageBytes / storageQuota.limitBytes) * 100));
+    const freeValue = formatStorageQuotaBytes(freeBytes);
+    const pct =
+      storageQuota.percentUsed ??
+      Math.min(100, Math.round((storageQuota.usageBytes / storageQuota.limitBytes) * 1000) / 10);
+
     return {
-      totalLabel: `${totalFormatted} Cloud`,
-      usedLabel: `${usedFormatted} Used`,
-      freeLabel: `${freeFormatted} Free (${pct}%)`,
+      totalValue,
+      totalLabel: `${totalValue} Cloud`,
+      usedValue,
+      freeValue,
+      inDriveValue,
+      trashValue,
       pct: Math.min(100, Math.max(0, pct)),
       pctLabel: `${pct}%`,
     };
@@ -353,7 +366,7 @@ function CloudupPage() {
   return (
     <div
       data-testid="cloudup-page-root"
-      className="glass-scroll flex h-full w-full flex-col overflow-y-auto px-4 pb-12 pt-16 sm:px-6 sm:pt-16 lg:px-10 lg:pl-20 lg:pt-8"
+      className="glass-scroll flex h-full w-full flex-col overflow-y-auto px-4 pb-12 pt-16 sm:px-6 sm:pt-16 md:px-8 md:pt-16 lg:px-10 lg:pl-20 lg:pt-8"
       onDragOver={(e) => {
         e.preventDefault();
         setIsDraggingFile(true);
@@ -369,7 +382,7 @@ function CloudupPage() {
         handleStageFiles(e.dataTransfer.files);
       }}
     >
-      <div className="mx-auto w-full max-w-[1300px] space-y-5 pb-8">
+      <div className="mx-auto w-full max-w-[1160px] space-y-5 pb-8">
         {/* ========================================================================= */}
         {/* 1. TOP HEADER CARD                                                        */}
         {/* ========================================================================= */}
@@ -385,7 +398,7 @@ function CloudupPage() {
                 <CloudUpload className="h-5.5 w-5.5 text-primary" />
               </div>
               <div className="min-w-0 space-y-0.5">
-                <h1 className="text-base sm:text-lg font-bold text-foreground tracking-tight">
+                <h1 className="text-base sm:text-lg font-semibold text-foreground tracking-tight">
                   Cloud Uploading
                 </h1>
                 <p className="text-xs text-muted-foreground truncate">
@@ -441,19 +454,19 @@ function CloudupPage() {
           </div>
 
           {/* Aligned Header Metadata Strip: Root Folder on left, Signed-in Account on right */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-glass-edge/60 pt-3 text-xs text-muted-foreground">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-t border-glass-edge/60 pt-3.5 text-xs text-muted-foreground">
             <div className="flex items-center gap-2 min-w-0">
               <FolderOpen className="h-3.5 w-3.5 text-primary shrink-0" />
-              <span>Drive Root:</span>
-              <span className="rounded-full bg-glass/60 border border-glass-edge px-2.5 py-0.5 text-[11px] text-foreground font-mono truncate">
+              <span className="font-medium">Drive Root:</span>
+              <span className="rounded-full bg-glass/60 border border-glass-edge px-3 py-0.5 text-xs font-medium text-foreground truncate">
                 {cloudFolderName}/
               </span>
             </div>
 
             {driveConnected && (
-              <div className="flex items-center gap-1.5 min-w-0 sm:justify-end">
+              <div className="flex items-center gap-2 min-w-0 sm:justify-end">
                 <Mail className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
-                <span className="truncate font-mono text-[11px] text-foreground/90">
+                <span className="truncate font-sans text-xs font-medium text-foreground tracking-tight">
                   {driveEmail || "Google Drive"}
                 </span>
               </div>
@@ -462,104 +475,159 @@ function CloudupPage() {
         </GlassCard>
 
         {/* ========================================================================= */}
-        {/* 2. AUTHENTIC REAL STORAGE QUOTA CARD                                      */}
+        {/* 2. RECONSTRUCTED AUTHENTIC STORAGE QUOTA CARD                             */}
         {/* ========================================================================= */}
-        <div className="w-full">
-          <GlassCard
-            variant="panel"
-            padding="sm"
-            className="frost-panel flex flex-col justify-between p-5 sm:p-6"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="bg-pearl flex h-8 w-8 items-center justify-center rounded-xl border border-glass-edge shadow-sm">
-                  <Database className="h-4 w-4 text-primary" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold tracking-tight text-foreground uppercase">
-                    Storage Quota
-                  </h3>
-                  <p className="text-[11px] text-muted-foreground">
-                    Authentic Google Drive capacity &amp; usage
-                  </p>
-                </div>
+        <GlassCard
+          variant="panel"
+          padding="md"
+          className="frost-panel flex flex-col p-5 sm:p-6"
+        >
+          {/* Card Header with Medium Refresh Button */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 pb-4 border-b border-glass-edge/60">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="bg-pearl flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
+                <Database className="h-4.5 w-4.5 text-primary" />
               </div>
+              <div className="min-w-0 space-y-0.5">
+                <h2 className="text-sm sm:text-base font-semibold tracking-tight text-foreground">
+                  Storage Quota
+                </h2>
+                <p className="text-xs text-muted-foreground truncate">
+                  Real-time Google Drive capacity &amp; storage breakdown
+                </p>
+              </div>
+            </div>
 
-              {driveConnected ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono font-medium text-foreground">
-                    {quotaDisplay?.totalLabel || (quotaLoading ? "Checking…" : "Google Drive")}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void loadRealDriveQuota()}
-                    disabled={quotaLoading}
-                    title="Refresh quota from Google Drive"
-                    className="rounded-full p-1 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <RefreshCw className={`h-3 w-3 ${quotaLoading ? "animate-spin" : ""}`} />
-                  </button>
-                </div>
-              ) : (
-                <span className="text-[11px] text-muted-foreground font-mono">
-                  Google Drive not connected
+            {driveConnected ? (
+              <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0">
+                <span className="rounded-full bg-glass/60 border border-glass-edge px-3.5 py-1.5 text-xs font-semibold tabular-nums tracking-tight text-foreground">
+                  {quotaDisplay?.totalLabel || (quotaLoading ? "Checking…" : "Google Drive")}
                 </span>
-              )}
-            </div>
+                <button
+                  type="button"
+                  onClick={() => void loadRealDriveQuota()}
+                  disabled={quotaLoading}
+                  title="Refresh storage quota from Google Drive"
+                  aria-label="Refresh storage quota"
+                  className="glass-pill liquid-press inline-flex h-10 items-center justify-center gap-2 rounded-full px-4 text-xs font-medium text-foreground border border-glass-edge hover:bg-glass-strong cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 text-muted-foreground ${quotaLoading ? "animate-spin" : ""}`} />
+                  <span>{quotaLoading ? "Refreshing…" : "Refresh"}</span>
+                </button>
+              </div>
+            ) : (
+              <span className="self-start sm:self-auto rounded-full bg-glass/60 border border-glass-edge px-3 py-1 text-xs font-medium text-muted-foreground">
+                Not Connected
+              </span>
+            )}
+          </div>
 
-            {/* Quota metric bar */}
-            <div className="my-3.5 space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                {driveConnected && quotaDisplay ? (
-                  <>
-                    <span className="font-semibold text-foreground">
-                      {quotaDisplay.usedLabel}
-                    </span>
-                    <span className="text-muted-foreground font-mono">
-                      {quotaDisplay.freeLabel}
-                    </span>
-                  </>
-                ) : driveConnected && quotaLoading ? (
-                  <span className="text-muted-foreground text-xs animate-pulse">
-                    Retrieving real storage quota from Google Drive API…
-                  </span>
-                ) : (
-                  <>
-                    <span className="text-muted-foreground text-xs">
-                      No active Google Drive quota data
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      Click Sync to view real quota
-                    </span>
-                  </>
-                )}
+          {/* Reconstructed Storage Metric Grid */}
+          {driveConnected && quotaDisplay && storageQuota ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 py-4">
+              <div className="rounded-2xl border border-glass-edge/70 bg-glass/35 px-4 py-3.5 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Used Space</p>
+                <p className="text-lg sm:text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                  {quotaDisplay.usedValue}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  In Drive: {quotaDisplay.inDriveValue}
+                </p>
               </div>
 
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/10 dark:bg-white/5 border border-glass-edge">
+              <div className="rounded-2xl border border-glass-edge/70 bg-glass/35 px-4 py-3.5 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Available Space</p>
+                <p className="text-lg sm:text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                  {quotaDisplay.freeValue}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {storageQuota.isUnlimited
+                    ? "Unlimited Google plan"
+                    : `Of ${quotaDisplay.totalValue} plan`}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-glass-edge/70 bg-glass/35 px-4 py-3.5 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Quota Utilization</p>
+                <p className="text-lg sm:text-xl font-semibold tracking-tight tabular-nums text-foreground">
+                  {quotaDisplay.pctLabel}
+                </p>
+                <p className="text-xs text-muted-foreground tabular-nums">
+                  {storageQuota.usageInDriveTrashBytes > 0
+                    ? `Trash: ${quotaDisplay.trashValue}`
+                    : "Trash: 0 MB"}
+                </p>
+              </div>
+            </div>
+          ) : driveConnected && quotaLoading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 py-4">
+              {[0, 1, 2].map((skeletonIdx) => (
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-primary to-cyan-400 transition-all duration-500"
-                  style={{
-                    width: driveConnected && quotaDisplay ? `${quotaDisplay.pct}%` : "0%",
-                  }}
-                />
-              </div>
+                  key={skeletonIdx}
+                  className="rounded-2xl border border-glass-edge/60 bg-glass/25 px-4 py-4 space-y-2 animate-pulse"
+                >
+                  <div className="h-3 w-20 rounded-full bg-foreground/10" />
+                  <div className="h-6 w-28 rounded-full bg-foreground/15" />
+                  <div className="h-3 w-24 rounded-full bg-foreground/10" />
+                </div>
+              ))}
             </div>
+          ) : driveConnected && quotaError ? (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4 text-xs">
+              <span className="text-muted-foreground">{quotaError}</span>
+              <button
+                type="button"
+                onClick={() => void loadRealDriveQuota()}
+                className="glass-pill liquid-press inline-flex h-9 items-center gap-1.5 rounded-full px-4 font-medium text-foreground border border-glass-edge self-start sm:self-auto"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Retry</span>
+              </button>
+            </div>
+          ) : (
+            <div className="py-5 text-xs text-muted-foreground">
+              Click <span className="font-semibold text-foreground">Sync</span> in the header above to sign in with Google Drive and view real storage capacity and usage.
+            </div>
+          )}
 
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-glass-edge/40">
-              <span className="flex items-center gap-1.5">
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    driveConnected ? "bg-emerald-400 animate-pulse" : "bg-muted-foreground/40"
-                  }`}
-                />
-                <span>{driveConnected ? "Google Drive Sync Active" : "Offline Storage"}</span>
-              </span>
-              <span>
-                {cloudFiles.length} file{cloudFiles.length === 1 ? "" : "s"} tracked
+          {/* Capacity Progress Bar */}
+          <div className="space-y-2 pb-4">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-muted-foreground">Capacity Usage</span>
+              <span className="font-semibold tabular-nums text-foreground">
+                {driveConnected && quotaDisplay
+                  ? `${quotaDisplay.usedValue} of ${quotaDisplay.totalValue} (${quotaDisplay.pctLabel})`
+                  : "—"}
               </span>
             </div>
-          </GlassCard>
-        </div>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-foreground/10 border border-glass-edge/70">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-primary to-cyan-400 transition-all duration-500"
+                style={{
+                  width:
+                    driveConnected && quotaDisplay
+                      ? `${Math.max(quotaDisplay.pct, storageQuota?.usageBytes ? 1.5 : 0)}%`
+                      : "0%",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Card Footer */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-glass-edge/60 pt-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2 font-medium">
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  driveConnected ? "bg-emerald-400 animate-pulse" : "bg-muted-foreground/40"
+                }`}
+              />
+              <span>{driveConnected ? "Google Drive Sync Active" : "Offline Storage"}</span>
+            </span>
+            <span className="font-medium tabular-nums">
+              {cloudFiles.length} file{cloudFiles.length === 1 ? "" : "s"} tracked
+            </span>
+          </div>
+        </GlassCard>
 
         {/* ========================================================================= */}
         {/* 3. INLINE DROPZONE & SINGLE UPLOAD BUTTON                                 */}
@@ -594,7 +662,7 @@ function CloudupPage() {
               <CloudUpload className="h-7 w-7 text-primary animate-pulse" />
             </div>
 
-            <h2 className="text-base sm:text-lg font-bold text-foreground tracking-tight">
+            <h2 className="text-base sm:text-lg font-semibold text-foreground tracking-tight">
               Drag &amp; Drop Files Anywhere to Upload
             </h2>
 
@@ -606,7 +674,7 @@ function CloudupPage() {
               </span>
 
               {/* File size indication: Unlimited */}
-              <span className="text-[11px] text-muted-foreground tracking-wide font-medium">
+              <span className="text-xs text-muted-foreground tracking-normal font-medium">
                 Unlimited file size · All formats supported
               </span>
             </div>
@@ -618,7 +686,7 @@ function CloudupPage() {
               <div className="flex items-center justify-between border-b border-glass-edge pb-3 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4.5 w-4.5 text-emerald-400" />
-                  <h3 className="text-sm font-semibold text-foreground">
+                  <h3 className="text-sm font-semibold text-foreground tabular-nums">
                     Upload Queue ({stagedFiles.length} file{stagedFiles.length > 1 ? "s" : ""})
                   </h3>
                 </div>
@@ -634,7 +702,7 @@ function CloudupPage() {
                     type="button"
                     disabled={uploadingCloudFile}
                     onClick={() => executeUploadProcess(stagedFiles)}
-                    className="btn-ink liquid-press flex h-8.5 items-center gap-1.5 rounded-full px-5 text-xs font-semibold shadow-sm cursor-pointer"
+                    className="btn-ink liquid-press flex h-9 items-center gap-1.5 rounded-full px-5 text-xs font-semibold shadow-sm cursor-pointer tabular-nums"
                   >
                     {uploadingCloudFile ? (
                       <>
@@ -656,7 +724,7 @@ function CloudupPage() {
                 <div className="space-y-1.5 pt-1">
                   <div className="flex justify-between text-xs font-medium">
                     <span className="text-primary">Syncing to Google Drive…</span>
-                    <span className="font-mono text-primary">{cloudUploadProgress}%</span>
+                    <span className="font-semibold tabular-nums text-primary">{cloudUploadProgress}%</span>
                   </div>
                   <div className="h-2 w-full overflow-hidden rounded-full bg-white/10 border border-glass-edge">
                     <div
@@ -680,9 +748,9 @@ function CloudupPage() {
                         <Cloud className="h-4 w-4 text-primary shrink-0" />
                         <div className="min-w-0">
                           <p className="font-medium text-foreground truncate">{file.name}</p>
-                          <p className="text-[10px] text-muted-foreground">
+                          <p className="text-[11px] text-muted-foreground tabular-nums">
                             {formatFileSize(file.size)} · Target:{" "}
-                            <span className="font-mono text-foreground/80">
+                            <span className="font-medium text-foreground/85">
                               {cloudFolderName}/{classification.category}
                               {classification.documentSubfolder ? `/${classification.documentSubfolder}` : ""}
                             </span>
@@ -691,13 +759,14 @@ function CloudupPage() {
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-[9px] font-semibold px-2 py-0.5 rounded-full border bg-muted/40 border-glass-edge text-muted-foreground">
+                        <span className="text-[10px] font-medium px-2.5 py-0.5 rounded-full border bg-muted/40 border-glass-edge text-muted-foreground">
                           {classification.category}
                         </span>
                         <button
                           type="button"
                           onClick={() => handleRemoveStagedFile(idx)}
-                          className="rounded-full p-1 text-muted-foreground hover:text-destructive transition-colors"
+                          aria-label={`Remove ${file.name}`}
+                          className="rounded-full p-1.5 text-muted-foreground hover:text-destructive transition-colors"
                         >
                           <X className="h-3.5 w-3.5" />
                         </button>
