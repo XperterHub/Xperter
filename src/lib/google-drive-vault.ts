@@ -8,10 +8,14 @@ import {
 } from "@/lib/username-id";
 import {
   classifyFile,
+  getXperterFolderCache,
   initializeXperterDriveHierarchy,
+  saveXperterFolderCache,
   uploadClassifiedFileToXperter,
   XPERTER_ROOT_FOLDER_NAME,
+  type DocumentSubfolder,
   type FileClassificationResult,
+  type XperterCategory,
   type XperterFolderCache,
 } from "@/lib/xperter-drive-organizer";
 
@@ -56,31 +60,7 @@ let cachedDriveAccessToken: string | null = null;
 let cachedDriveUserEmail: string | null = null;
 
 export function isDriveConnected(): boolean {
-  if (cachedDriveAccessToken) return true;
-  const storage = getSafeLocalStorage();
-  try {
-    const raw = storage.getItem(DRIVE_AUTH_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed?.accessToken) {
-        cachedDriveAccessToken = parsed.accessToken;
-        if (parsed.email && !cachedDriveUserEmail) {
-          cachedDriveUserEmail = parsed.email;
-        }
-        return true;
-      }
-    }
-    if (storage.getItem(DRIVE_CONNECTED_FLAG_KEY) === "true") return true;
-  } catch {}
-
-  // If user is authenticated with Google, they already authorized Drive
-  if (
-    auth.currentUser?.email &&
-    auth.currentUser.providerData.some((p) => p.providerId === "google.com")
-  ) {
-    return true;
-  }
-  return false;
+  return Boolean(getDriveAccessToken());
 }
 
 export function getDriveAccessToken(): string | null {
@@ -358,14 +338,190 @@ export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  if (bytes < 1024 * 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(2)} TB`;
+}
+
+export function formatStorageQuotaBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  const KB = 1024;
+  const MB = KB * 1024;
+  const GB = MB * 1024;
+  const TB = GB * 1024;
+  if (bytes < MB) return `${Math.max(1, Math.round(bytes / KB))} KB`;
+  if (bytes < GB) return `${(bytes / MB).toFixed(1)} MB`;
+  if (bytes < TB) return `${(bytes / GB).toFixed(1)} GB`;
+  return `${(bytes / TB).toFixed(2)} TB`;
+}
+
+export interface GoogleDriveStorageQuota {
+  limitBytes: number | null;
+  usageBytes: number;
+  usageInDriveBytes: number;
+  usageInDriveTrashBytes: number;
+  freeBytes: number | null;
+  percentUsed: number | null;
+  isUnlimited: boolean;
+  userEmail?: string;
+  displayName?: string;
+  fetchedAtIso: string;
+}
+
+/**
+ * Fetches authentic Google Drive storage quota from `drive/v3/about?fields=storageQuota,user`.
+ */
+export async function fetchGoogleDriveStorageQuota(
+  accessToken?: string,
+): Promise<GoogleDriveStorageQuota> {
+  const token = accessToken || getDriveAccessToken();
+  if (!token) {
+    throw new Error("Not connected to Google Drive. Click Sync to authenticate.");
+  }
+
+  const res = await fetch(
+    "https://www.googleapis.com/drive/v3/about?fields=storageQuota,user",
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  if (res.status === 401 || res.status === 403) {
+    disconnectGoogleDrive();
+    throw new Error("Google Drive session expired. Please click Sync to reconnect.");
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to fetch Drive storage quota (${res.status}): ${errText}`);
+  }
+
+  const data = (await res.json()) as {
+    storageQuota?: {
+      limit?: string;
+      usage?: string;
+      usageInDrive?: string;
+      usageInDriveTrash?: string;
+    };
+    user?: {
+      emailAddress?: string;
+      displayName?: string;
+    };
+  };
+
+  const quota = data.storageQuota || {};
+  const limitNum = quota.limit ? Number(quota.limit) : NaN;
+  const limitBytes = Number.isFinite(limitNum) && limitNum > 0 ? limitNum : null;
+  const usageBytes = Math.max(0, Number(quota.usage ?? 0) || 0);
+  const usageInDriveBytes = Math.max(0, Number(quota.usageInDrive ?? 0) || 0);
+  const usageInDriveTrashBytes = Math.max(0, Number(quota.usageInDriveTrash ?? 0) || 0);
+  const freeBytes = limitBytes !== null ? Math.max(0, limitBytes - usageBytes) : null;
+  const percentUsed =
+    limitBytes !== null && limitBytes > 0
+      ? Math.min(100, Math.round((usageBytes / limitBytes) * 1000) / 10)
+      : null;
+
+  if (data.user?.emailAddress) {
+    setDriveAccessTokenInMemory(token, data.user.emailAddress);
+  }
+
+  return {
+    limitBytes,
+    usageBytes,
+    usageInDriveBytes,
+    usageInDriveTrashBytes,
+    freeBytes,
+    percentUsed,
+    isUnlimited: limitBytes === null,
+    userEmail: data.user?.emailAddress,
+    displayName: data.user?.displayName,
+    fetchedAtIso: new Date().toISOString(),
+  };
+}
+
+/**
+ * Fetches real non-folder files accessible via the connected Google Drive OAuth session.
+ */
+export async function fetchGoogleDriveTrackedFiles(params?: {
+  accessToken?: string;
+  pageSize?: number;
+  rootFolderName?: string;
+}): Promise<CloudUploadedItem[]> {
+  const token = params?.accessToken || getDriveAccessToken();
+  if (!token) return [];
+
+  const pageSize = Math.min(500, Math.max(10, params?.pageSize ?? 200));
+  const q = encodeURIComponent(
+    "trashed = false and mimeType != 'application/vnd.google-apps.folder'",
+  );
+
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,mimeType,size,webViewLink,createdTime,modifiedTime,parents,description)&orderBy=modifiedTime%20desc&pageSize=${pageSize}&spaces=drive`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
+  );
+
+  if (res.status === 401 || res.status === 403) {
+    disconnectGoogleDrive();
+    throw new Error("Google Drive session expired. Please click Sync to reconnect.");
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to fetch Drive files (${res.status}): ${errText}`);
+  }
+
+  const data = (await res.json()) as {
+    files?: Array<{
+      id: string;
+      name: string;
+      mimeType?: string;
+      size?: string;
+      webViewLink?: string;
+      createdTime?: string;
+      modifiedTime?: string;
+    }>;
+  };
+
+  const rootName = params?.rootFolderName || XPERTER_ROOT_FOLDER_NAME;
+  return (data.files || []).map((f) => {
+    const sizeBytes = Number(f.size ?? 0) || 0;
+    const classified = classifyFile(f.name, f.mimeType);
+    return {
+      id: f.id,
+      name: f.name,
+      sizeBytes,
+      sizeFormatted: formatFileSize(sizeBytes),
+      mimeType: f.mimeType || "application/octet-stream",
+      folderName: classified.documentSubfolder || classified.category,
+      folderPath: `${rootName}/${classified.category}${
+        classified.documentSubfolder ? `/${classified.documentSubfolder}` : ""
+      }`,
+      category: classified.category,
+      documentSubfolder: classified.documentSubfolder,
+      driveFileId: f.id,
+      webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+      uploadedAtIso: f.modifiedTime || f.createdTime || new Date().toISOString(),
+      syncedToDrive: true,
+    };
+  });
 }
 
 /**
  * Connects the user's Google account with the `https://www.googleapis.com/auth/drive.file` scope
  * and caches the OAuth access token in memory.
  */
-export async function connectGoogleAccountForDrive(userKey?: string): Promise<{
+export async function connectGoogleAccountForDrive(
+  userKey?: string,
+  rootFolderName?: string,
+): Promise<{
   accessToken: string;
   email: string;
   displayName: string;
@@ -391,6 +547,7 @@ export async function connectGoogleAccountForDrive(userKey?: string): Promise<{
     folderCache = await initializeXperterDriveHierarchy({
       userKey: key,
       accessToken: token,
+      rootFolderName,
     });
   } catch (err) {
     console.warn("Failed to initialize Xperter drive hierarchy on connect:", err);
@@ -634,13 +791,23 @@ export interface CloudUploadedItem {
 const CLOUD_FILES_PREFIX = "lumen.cloud.files.";
 const CLOUD_FOLDER_PREFIX = "lumen.cloud.foldername.";
 
+export function isSpecimenCloudFile(item: Partial<CloudUploadedItem> | null | undefined): boolean {
+  if (!item) return true;
+  if (typeof item.id === "string" && item.id.startsWith("specimen_")) return true;
+  if (typeof item.driveFileId === "string" && item.driveFileId.startsWith("demo_drive_")) {
+    return true;
+  }
+  return false;
+}
+
 export function loadCloudFiles(uid: string): CloudUploadedItem[] {
   const store = getSafeLocalStorage();
   const raw = store.getItem(`${CLOUD_FILES_PREFIX}${uid}`);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => !isSpecimenCloudFile(item));
   } catch {
     return [];
   }
@@ -649,7 +816,8 @@ export function loadCloudFiles(uid: string): CloudUploadedItem[] {
 export function saveCloudFiles(uid: string, files: CloudUploadedItem[]): void {
   const store = getSafeLocalStorage();
   try {
-    store.setItem(`${CLOUD_FILES_PREFIX}${uid}`, JSON.stringify(files));
+    const sanitized = files.filter((item) => !isSpecimenCloudFile(item));
+    store.setItem(`${CLOUD_FILES_PREFIX}${uid}`, JSON.stringify(sanitized));
   } catch {
     // Ignore storage errors
   }
@@ -671,18 +839,23 @@ export function setCustomCloudFolderName(uid: string, folderName: string): void 
 }
 
 /**
- * Uploads any generic file to Google Drive.
- * When targeted to the "Xperter" folder, it automatically classifies the file
- * and places it directly into the proper category and document subfolder.
+ * Uploads any generic file to Google Drive with unlimited size support (resumable > 5 MiB).
+ * Automatically classifies and routes the file into category and document subfolders
+ * under the user's chosen root folder (default "Xperter").
  */
 export async function uploadGenericFileToGoogleDrive(params: {
   file: File;
   folderName?: string;
+  customRootFolderName?: string;
+  category?: XperterCategory;
+  documentSubfolder?: DocumentSubfolder;
   relativePath?: string;
   accessToken?: string;
   userKey?: string;
+  onProgress?: (percent: number) => void;
 }): Promise<{
   driveFileId: string;
+  fileId: string;
   folderId: string;
   folderName: string;
   folderPath: string;
@@ -690,91 +863,33 @@ export async function uploadGenericFileToGoogleDrive(params: {
   classification?: FileClassificationResult;
   webViewLink?: string;
 }> {
-  const token = params.accessToken || cachedDriveAccessToken;
+  const token = params.accessToken || getDriveAccessToken();
   if (!token) {
     throw new Error("Connect your Google Account to upload files to Google Drive.");
   }
 
-  const effectiveFolderName = (params.folderName || XPERTER_ROOT_FOLDER_NAME).trim();
+  const effectiveFolderName =
+    (params.customRootFolderName || params.folderName || XPERTER_ROOT_FOLDER_NAME).trim() ||
+    XPERTER_ROOT_FOLDER_NAME;
 
-  // If using the standard Xperter ecosystem, route through the intelligent classifier
-  if (effectiveFolderName === XPERTER_ROOT_FOLDER_NAME) {
-    const uploaded = await uploadClassifiedFileToXperter({
-      file: params.file,
-      userKey: params.userKey || cachedDriveUserEmail || "default",
-      accessToken: token,
-    });
-
-    return {
-      driveFileId: uploaded.driveFileId,
-      folderId: uploaded.folderId,
-      folderName: uploaded.classification.folderName,
-      folderPath: uploaded.folderPath,
-      fileName: uploaded.fileName,
-      classification: uploaded.classification,
-      ...(uploaded.webViewLink ? { webViewLink: uploaded.webViewLink } : {}),
-    };
-  }
-
-  // Fallback for custom named single folders
-  const { folderId, folderName } = await ensureDriveUserDocFolder(
-    "",
-    token,
-    effectiveFolderName,
-  );
-
-  const classification = classifyFile(params.file.name, params.file.type);
-  const metadata = {
-    name: params.file.name,
-    parents: [folderId],
-    description: `Uploaded via Xperter Cloud Uploading (${params.relativePath || params.file.name})`,
-  };
-
-  const form = new FormData();
-  form.append(
-    "metadata",
-    new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-  );
-  form.append("file", params.file, params.file.name);
-
-  const uploadRes = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      body: form,
-    },
-  );
-
-  if (uploadRes.status === 401 || uploadRes.status === 403) {
-    cachedDriveAccessToken = null;
-    const storage = getSafeLocalStorage();
-    try {
-      storage.removeItem(DRIVE_AUTH_STORAGE_KEY);
-    } catch {}
-    throw new Error("Google Drive session expired. Please click Sync to refresh.");
-  }
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text().catch(() => "");
-    throw new Error(`Google Drive upload failed (${uploadRes.status}): ${errText}`);
-  }
-
-  const uploaded = (await uploadRes.json()) as {
-    id: string;
-    name: string;
-    webViewLink?: string;
-  };
+  const uploaded = await uploadClassifiedFileToXperter({
+    file: params.file,
+    userKey: params.userKey || cachedDriveUserEmail || "default",
+    accessToken: token,
+    rootFolderName: effectiveFolderName,
+    categoryOverride: params.category,
+    documentSubfolderOverride: params.documentSubfolder,
+    onProgress: params.onProgress,
+  });
 
   return {
-    driveFileId: uploaded.id,
-    folderId,
-    folderName,
-    folderPath: `${effectiveFolderName}/${params.file.name}`,
-    fileName: uploaded.name || params.file.name,
-    classification,
+    driveFileId: uploaded.driveFileId,
+    fileId: uploaded.driveFileId,
+    folderId: uploaded.folderId,
+    folderName: uploaded.classification.folderName,
+    folderPath: uploaded.folderPath,
+    fileName: uploaded.fileName,
+    classification: uploaded.classification,
     ...(uploaded.webViewLink ? { webViewLink: uploaded.webViewLink } : {}),
   };
 }
@@ -799,6 +914,44 @@ export async function renameDriveFolder(
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     throw new Error(`Failed to rename Google Drive folder: ${errText}`);
+  }
+}
+
+/**
+ * Renames the active Cloudup root folder on Google Drive (or creates it if not yet cached)
+ * and updates the cached root folder name.
+ */
+export async function renameXperterRootFolder(params: {
+  userKey: string;
+  currentFolderName: string;
+  newFolderName: string;
+  accessToken?: string;
+}): Promise<void> {
+  const token = params.accessToken || getDriveAccessToken();
+  const cleanNewName = params.newFolderName.trim();
+  if (!token || !cleanNewName) return;
+
+  const cached = getXperterFolderCache(params.userKey);
+  let targetFolderId = cached?.rootFolderId;
+
+  if (!targetFolderId) {
+    const ensured = await ensureDriveUserDocFolder(
+      "",
+      token,
+      params.currentFolderName || XPERTER_ROOT_FOLDER_NAME,
+    );
+    targetFolderId = ensured.folderId;
+  }
+
+  await renameDriveFolder(targetFolderId, cleanNewName, token);
+
+  if (cached) {
+    saveXperterFolderCache(params.userKey, {
+      ...cached,
+      rootFolderId: targetFolderId,
+      rootFolderName: cleanNewName,
+      lastUpdatedIso: new Date().toISOString(),
+    });
   }
 }
 

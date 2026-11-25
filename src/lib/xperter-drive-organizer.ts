@@ -687,8 +687,11 @@ export async function initializeXperterDriveHierarchy(params: {
   userKey: string;
   accessToken: string;
   forceRefresh?: boolean;
+  rootFolderName?: string;
 }): Promise<XperterFolderCache> {
-  const { userKey, accessToken, forceRefresh = false } = params;
+  const { userKey, accessToken, forceRefresh = false, rootFolderName } = params;
+  const targetRootName =
+    (rootFolderName || XPERTER_ROOT_FOLDER_NAME).trim() || XPERTER_ROOT_FOLDER_NAME;
   if (!accessToken) {
     throw new Error("Google Drive access token required to initialize Xperter.");
   }
@@ -698,6 +701,7 @@ export async function initializeXperterDriveHierarchy(params: {
     if (
       existingCache &&
       existingCache.rootFolderId &&
+      existingCache.rootFolderName === targetRootName &&
       Object.keys(existingCache.categoryFolders).length >=
         XPERTER_CATEGORIES.length &&
       Object.keys(existingCache.documentSubfolders).length >=
@@ -707,9 +711,9 @@ export async function initializeXperterDriveHierarchy(params: {
     }
   }
 
-  // 1. Root: "Xperter"
+  // 1. Root folder (defaults to "Xperter")
   const root = await findOrCreateDriveFolder({
-    name: XPERTER_ROOT_FOLDER_NAME,
+    name: targetRootName,
     accessToken,
   });
 
@@ -786,7 +790,7 @@ export async function initializeXperterDriveHierarchy(params: {
 
   const cache: XperterFolderCache = {
     rootFolderId: root.id,
-    rootFolderName: XPERTER_ROOT_FOLDER_NAME,
+    rootFolderName: targetRootName,
     categoryFolders,
     documentSubfolders,
     lastUpdatedIso: new Date().toISOString(),
@@ -794,6 +798,180 @@ export async function initializeXperterDriveHierarchy(params: {
 
   saveXperterFolderCache(userKey, cache);
   return cache;
+}
+
+const MULTIPART_UPLOAD_THRESHOLD_BYTES = 5 * 1024 * 1024; // 5 MiB Google Drive multipart cap
+const RESUMABLE_CHUNK_SIZE_BYTES = 8 * 1024 * 1024; // 8 MiB (multiple of 256 KiB)
+
+/**
+ * Uploads a file of arbitrary size to Google Drive using multipart (<= 5 MiB)
+ * or chunked resumable upload (> 5 MiB, supporting unlimited multi-GB files).
+ */
+export async function uploadBlobToDriveFolder(params: {
+  file: File;
+  parentId: string;
+  description?: string;
+  accessToken: string;
+  onProgress?: (percent: number) => void;
+}): Promise<{
+  id: string;
+  name: string;
+  webViewLink?: string;
+  sizeBytes?: number;
+}> {
+  const { file, parentId, description, accessToken, onProgress } = params;
+  const metadata = {
+    name: file.name,
+    parents: [parentId],
+    ...(description ? { description } : {}),
+  };
+
+  if (file.size <= MULTIPART_UPLOAD_THRESHOLD_BYTES) {
+    const formData = new FormData();
+    formData.append(
+      "metadata",
+      new Blob([JSON.stringify(metadata)], { type: "application/json" }),
+    );
+    formData.append("file", file, file.name);
+
+    const uploadRes = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,parents,size",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      },
+    );
+
+    if (uploadRes.status === 401 || uploadRes.status === 403) {
+      throw new Error(
+        "Google Drive authorization expired. Please reconnect your account.",
+      );
+    }
+
+    if (!uploadRes.ok) {
+      const errText = await uploadRes.text().catch(() => "");
+      throw new Error(
+        `Upload to Google Drive failed (${uploadRes.status}): ${errText}`,
+      );
+    }
+
+    const uploaded = (await uploadRes.json()) as {
+      id: string;
+      name: string;
+      webViewLink?: string;
+      size?: string;
+    };
+    onProgress?.(100);
+    return {
+      id: uploaded.id,
+      name: uploaded.name || file.name,
+      ...(uploaded.webViewLink ? { webViewLink: uploaded.webViewLink } : {}),
+      ...(uploaded.size ? { sizeBytes: Number(uploaded.size) } : {}),
+    };
+  }
+
+  // Resumable upload session for large / unlimited files (> 5 MiB)
+  const contentType = file.type || "application/octet-stream";
+  const initRes = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,webViewLink,parents,size",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": contentType,
+        "X-Upload-Content-Length": String(file.size),
+      },
+      body: JSON.stringify(metadata),
+    },
+  );
+
+  if (initRes.status === 401 || initRes.status === 403) {
+    throw new Error(
+      "Google Drive authorization expired. Please reconnect your account.",
+    );
+  }
+
+  if (!initRes.ok) {
+    const errText = await initRes.text().catch(() => "");
+    throw new Error(
+      `Failed to initiate Google Drive resumable upload (${initRes.status}): ${errText}`,
+    );
+  }
+
+  const uploadUrl = initRes.headers.get("Location");
+  if (!uploadUrl) {
+    throw new Error("Google Drive did not return a resumable upload session URL.");
+  }
+
+  let offset = 0;
+  let uploadedResult: {
+    id: string;
+    name: string;
+    webViewLink?: string;
+    size?: string;
+  } | null = null;
+
+  while (offset < file.size) {
+    const end = Math.min(offset + RESUMABLE_CHUNK_SIZE_BYTES, file.size);
+    const chunk = file.slice(offset, end);
+    const contentRange = `bytes ${offset}-${end - 1}/${file.size}`;
+
+    const chunkRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": contentType,
+        "Content-Range": contentRange,
+      },
+      body: chunk,
+    });
+
+    if (chunkRes.status === 308) {
+      offset = end;
+      const pct = Math.min(99, Math.round((offset / file.size) * 100));
+      onProgress?.(pct);
+      continue;
+    }
+
+    if (chunkRes.status === 401 || chunkRes.status === 403) {
+      throw new Error(
+        "Google Drive authorization expired. Please reconnect your account.",
+      );
+    }
+
+    if (!chunkRes.ok) {
+      const errText = await chunkRes.text().catch(() => "");
+      throw new Error(
+        `Resumable upload to Google Drive failed (${chunkRes.status}): ${errText}`,
+      );
+    }
+
+    uploadedResult = (await chunkRes.json()) as {
+      id: string;
+      name: string;
+      webViewLink?: string;
+      size?: string;
+    };
+    offset = end;
+    onProgress?.(100);
+    break;
+  }
+
+  if (!uploadedResult) {
+    throw new Error("Google Drive resumable upload completed without file metadata.");
+  }
+
+  return {
+    id: uploadedResult.id,
+    name: uploadedResult.name || file.name,
+    ...(uploadedResult.webViewLink
+      ? { webViewLink: uploadedResult.webViewLink }
+      : {}),
+    ...(uploadedResult.size ? { sizeBytes: Number(uploadedResult.size) } : {}),
+  };
 }
 
 /**
@@ -805,9 +983,21 @@ export async function resolveDestinationFolder(params: {
   classification: FileClassificationResult;
   userKey: string;
   accessToken: string;
+  rootFolderName?: string;
 }): Promise<{ folderId: string; folderPath: string }> {
-  const { classification, userKey, accessToken } = params;
-  let cache = getXperterFolderCache(userKey);
+  const { classification, userKey, accessToken, rootFolderName } = params;
+  const targetRootName =
+    (rootFolderName || XPERTER_ROOT_FOLDER_NAME).trim() || XPERTER_ROOT_FOLDER_NAME;
+  const targetFolderPath =
+    targetRootName === XPERTER_ROOT_FOLDER_NAME
+      ? classification.folderPath
+      : `${targetRootName}/${classification.category}${
+          classification.documentSubfolder ? `/${classification.documentSubfolder}` : ""
+        }`;
+
+  const rawCache = getXperterFolderCache(userKey);
+  const cache =
+    rawCache && rawCache.rootFolderName === targetRootName ? rawCache : null;
 
   const rootId = cache?.rootFolderId;
   const catId = cache?.categoryFolders[classification.category];
@@ -822,7 +1012,7 @@ export async function resolveDestinationFolder(params: {
   if (rootId && catId && (!isDoc || subId)) {
     return {
       folderId: isDoc ? subId! : catId,
-      folderPath: classification.folderPath,
+      folderPath: targetFolderPath,
     };
   }
 
@@ -830,7 +1020,7 @@ export async function resolveDestinationFolder(params: {
   let activeRootId = rootId;
   if (!activeRootId) {
     const root = await findOrCreateDriveFolder({
-      name: XPERTER_ROOT_FOLDER_NAME,
+      name: targetRootName,
       accessToken,
     });
     activeRootId = root.id;
@@ -860,12 +1050,13 @@ export async function resolveDestinationFolder(params: {
   // Update cache incrementally
   const updatedCache: XperterFolderCache = cache || {
     rootFolderId: activeRootId,
-    rootFolderName: XPERTER_ROOT_FOLDER_NAME,
+    rootFolderName: targetRootName,
     categoryFolders: {},
     documentSubfolders: {},
     lastUpdatedIso: new Date().toISOString(),
   };
   updatedCache.rootFolderId = activeRootId;
+  updatedCache.rootFolderName = targetRootName;
   updatedCache.categoryFolders[classification.category] = activeCatId;
   if (isDoc && activeSubId) {
     updatedCache.documentSubfolders[classification.documentSubfolder!] =
@@ -874,22 +1065,30 @@ export async function resolveDestinationFolder(params: {
   saveXperterFolderCache(userKey, updatedCache);
 
   // Background non-blocking pre-warm of the rest of the hierarchy
-  initializeXperterDriveHierarchy({ userKey, accessToken }).catch(() => {});
+  initializeXperterDriveHierarchy({
+    userKey,
+    accessToken,
+    rootFolderName: targetRootName,
+  }).catch(() => {});
 
   return {
     folderId: isDoc ? activeSubId! : activeCatId,
-    folderPath: classification.folderPath,
+    folderPath: targetFolderPath,
   };
 }
 
 /**
  * Automatically classifies and uploads a file directly to the correct Google Drive folder.
- * Preserves original filename, type, and folder structure.
+ * Preserves original filename, type, and folder structure with unlimited file size support.
  */
 export async function uploadClassifiedFileToXperter(params: {
   file: File;
   userKey: string;
   accessToken: string;
+  rootFolderName?: string;
+  categoryOverride?: XperterCategory;
+  documentSubfolderOverride?: DocumentSubfolder;
+  onProgress?: (percent: number) => void;
 }): Promise<{
   driveFileId: string;
   fileName: string;
@@ -898,66 +1097,57 @@ export async function uploadClassifiedFileToXperter(params: {
   classification: FileClassificationResult;
   webViewLink?: string;
 }> {
-  const { file, userKey, accessToken } = params;
+  const {
+    file,
+    userKey,
+    accessToken,
+    rootFolderName,
+    categoryOverride,
+    documentSubfolderOverride,
+    onProgress,
+  } = params;
   if (!accessToken) {
     throw new Error(
       "Connect your Google Drive account before uploading files.",
     );
   }
 
-  // 1. Classify file intelligently
-  const classification = classifyFile(file.name, file.type);
+  // 1. Classify file intelligently (respecting optional explicit override)
+  const detected = classifyFile(file.name, file.type);
+  const resolvedCategory = categoryOverride || detected.category;
+  const resolvedSubfolder =
+    resolvedCategory === "Documents"
+      ? documentSubfolderOverride || detected.documentSubfolder || "OTHER_DOCUMENTS"
+      : undefined;
+  const activeRoot =
+    (rootFolderName || XPERTER_ROOT_FOLDER_NAME).trim() || XPERTER_ROOT_FOLDER_NAME;
+
+  const classification: FileClassificationResult = {
+    ...detected,
+    category: resolvedCategory,
+    documentSubfolder: resolvedSubfolder,
+    folderName: resolvedSubfolder || resolvedCategory,
+    folderPath: `${activeRoot}/${resolvedCategory}${
+      resolvedSubfolder ? `/${resolvedSubfolder}` : ""
+    }`,
+  };
 
   // 2. Resolve destination folder ID in Google Drive
   const { folderId, folderPath } = await resolveDestinationFolder({
     classification,
     userKey,
     accessToken,
+    rootFolderName: activeRoot,
   });
 
-  // 3. Perform multipart upload to target folder
-  const metadata = {
-    name: file.name,
-    parents: [folderId],
+  // 3. Upload via multipart (<= 5 MiB) or resumable chunked upload (> 5 MiB)
+  const uploaded = await uploadBlobToDriveFolder({
+    file,
+    parentId: folderId,
     description: `Organized via Xperter Cloud Uploading -> ${folderPath}`,
-  };
-
-  const formData = new FormData();
-  formData.append(
-    "metadata",
-    new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-  );
-  formData.append("file", file, file.name);
-
-  const uploadRes = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,parents",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: formData,
-    },
-  );
-
-  if (uploadRes.status === 401 || uploadRes.status === 403) {
-    throw new Error(
-      "Google Drive authorization expired. Please reconnect your account.",
-    );
-  }
-
-  if (!uploadRes.ok) {
-    const errText = await uploadRes.text().catch(() => "");
-    throw new Error(
-      `Upload to Google Drive failed (${uploadRes.status}): ${errText}`,
-    );
-  }
-
-  const uploaded = (await uploadRes.json()) as {
-    id: string;
-    name: string;
-    webViewLink?: string;
-  };
+    accessToken,
+    onProgress,
+  });
 
   return {
     driveFileId: uploaded.id,

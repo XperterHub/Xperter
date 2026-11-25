@@ -7,10 +7,18 @@ import {
   initializeXperterDriveHierarchy,
   resolveDestinationFolder,
   saveXperterFolderCache,
+  uploadBlobToDriveFolder,
   XPERTER_CATEGORIES,
   XPERTER_ROOT_FOLDER_NAME,
   type XperterFolderCache,
 } from "@/lib/xperter-drive-organizer";
+import {
+  fetchGoogleDriveStorageQuota,
+  fetchGoogleDriveTrackedFiles,
+  formatFileSize,
+  formatStorageQuotaBytes,
+  setDriveAccessTokenInMemory,
+} from "@/lib/google-drive-vault";
 
 describe("Xperter Google Drive Folder Management & Intelligent File Organization", () => {
   beforeEach(() => {
