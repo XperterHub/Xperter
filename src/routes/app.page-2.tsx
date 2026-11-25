@@ -2,29 +2,15 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  ArrowUpDown,
   CheckCircle2,
   Cloud,
   CloudUpload,
-  Copy,
   Database,
-  ExternalLink,
-  FileArchive,
-  FileCode,
-  FileText,
-  Film,
-  Folder,
-  FolderCheck,
-  FolderUp,
+  FolderOpen,
   HardDrive,
-  Image as ImageIcon,
-  Layers,
-  Music,
+  Mail,
   Pencil,
   RefreshCw,
-  Search,
-  Sparkles,
-  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -43,6 +29,7 @@ import {
   getDriveConnectedEmail,
   isDriveConnected,
   loadCloudFiles,
+  renameXperterRootFolder,
   saveCloudFiles,
   setCustomCloudFolderName,
   uploadGenericFileToGoogleDrive,
@@ -51,12 +38,7 @@ import {
 } from "@/lib/google-drive-vault";
 import {
   classifyFile,
-  DOCUMENT_SUBFOLDERS,
   initializeXperterDriveHierarchy,
-  XPERTER_CATEGORIES,
-  XPERTER_ROOT_FOLDER_NAME,
-  type DocumentSubfolder,
-  type XperterCategory,
 } from "@/lib/xperter-drive-organizer";
 import { sanitizeUsernameId } from "@/lib/username-id";
 
@@ -133,6 +115,10 @@ function CloudupPage() {
     } catch (err) {
       console.warn("Could not fetch real Google Drive quota:", err);
       setQuotaError(err instanceof Error ? err.message : "Unable to retrieve storage quota");
+      if (!isDriveConnected()) {
+        setDriveConnected(false);
+        setStorageQuota(null);
+      }
     } finally {
       setQuotaLoading(false);
     }
@@ -207,6 +193,20 @@ function CloudupPage() {
     if (!newName) {
       toast.error("Folder name cannot be empty");
       return;
+    }
+    const previousName = cloudFolderName;
+    const token = getDriveAccessToken();
+    if (token && newName !== previousName) {
+      try {
+        await renameXperterRootFolder({
+          userKey: effectiveUid,
+          currentFolderName: previousName,
+          newFolderName: newName,
+          accessToken: token,
+        });
+      } catch {
+        toast.warning("Renamed locally; could not update Drive folder right now.");
+      }
     }
     setCustomCloudFolderName(effectiveUid, newName);
     setCloudFolderName(newName);
@@ -353,7 +353,7 @@ function CloudupPage() {
   return (
     <div
       data-testid="cloudup-page-root"
-      className="glass-scroll flex h-full w-full flex-col overflow-y-auto px-4 py-5 sm:px-8 sm:py-6 lg:px-12"
+      className="glass-scroll flex h-full w-full flex-col overflow-y-auto px-4 pb-12 pt-16 sm:px-6 sm:pt-16 lg:px-10 lg:pl-20 lg:pt-8"
       onDragOver={(e) => {
         e.preventDefault();
         setIsDraggingFile(true);
@@ -369,85 +369,95 @@ function CloudupPage() {
         handleStageFiles(e.dataTransfer.files);
       }}
     >
-      <div className="mx-auto w-full max-w-[1300px] space-y-5 pb-16 pt-2 sm:pt-4">
+      <div className="mx-auto w-full max-w-[1300px] space-y-5 pb-8">
         {/* ========================================================================= */}
         {/* 1. TOP HEADER CARD                                                        */}
         {/* ========================================================================= */}
         <GlassCard
           variant="panel"
           padding="md"
-          className="frost-panel flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 sm:p-6"
+          className="frost-panel flex flex-col gap-4 p-5 sm:p-6"
         >
-          {/* Left: Title + Combined Drive Folder Tag + Neatly Realigned Account Email */}
-          <div className="flex items-center gap-3.5 min-w-0">
-            <div className="bg-pearl flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
-              <CloudUpload className="h-5.5 w-5.5 text-primary" />
-            </div>
-            <div className="min-w-0 space-y-1">
-              <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            {/* Left: Icon + Title + Concise Description */}
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="bg-pearl flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
+                <CloudUpload className="h-5.5 w-5.5 text-primary" />
+              </div>
+              <div className="min-w-0 space-y-0.5">
                 <h1 className="text-base sm:text-lg font-bold text-foreground tracking-tight">
                   Cloud Uploading
                 </h1>
-                <span className="rounded-full bg-glass/60 border border-glass-edge px-2.5 py-0.5 text-[11px] text-muted-foreground font-mono">
-                  Drive: {cloudFolderName}/
-                </span>
+                <p className="text-xs text-muted-foreground truncate">
+                  {driveConnected
+                    ? "Automatic Google Drive categorization & unlimited upload"
+                    : "Sign in with Google Drive to enable cloud backup & sync"}
+                </p>
               </div>
-              {/* Neatly aligned account status badge inside header card */}
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground truncate">
-                {driveConnected ? (
-                  <>
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" />
-                    <span className="truncate">
-                      Connected · <span className="font-mono text-foreground/90">{driveEmail || "Google Drive"}</span>
-                    </span>
-                  </>
-                ) : (
-                  <span>Sign in with Google Drive to enable cloud backup &amp; sync</span>
-                )}
-              </div>
+            </div>
+
+            {/* Right: Combined Sync / Green Connected Control + Rename */}
+            <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap shrink-0">
+              {!driveConnected ? (
+                <button
+                  type="button"
+                  onClick={handleConnectGoogleDrive}
+                  disabled={syncingDrive}
+                  data-testid="connect-google-drive-btn"
+                  title="Connect your Google Drive account"
+                  className="btn-ink liquid-press flex h-10 min-w-[6.5rem] items-center justify-center gap-2 rounded-full px-5 text-xs font-semibold shadow-sm cursor-pointer"
+                >
+                  <HardDrive className={`h-3.5 w-3.5 ${syncingDrive ? "animate-spin" : ""}`} />
+                  <span>{syncingDrive ? "Connecting…" : "Sync"}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void loadRealDriveQuota()}
+                  disabled={quotaLoading}
+                  data-testid="drive-connected-indicator"
+                  title="Google Drive connected — click to refresh quota"
+                  className="liquid-press inline-flex h-10 items-center gap-2 rounded-full px-4 text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 shadow-sm cursor-pointer transition-colors"
+                >
+                  <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  <span>Connected</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setRenameFolderInput(cloudFolderName);
+                  setRenameFolderModalOpen(true);
+                }}
+                data-testid="rename-cloud-folder-btn"
+                title="Rename root Google Drive folder"
+                className="glass-pill liquid-press flex h-10 min-w-[5.75rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge cursor-pointer"
+              >
+                <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                <span>Rename</span>
+              </button>
             </div>
           </div>
 
-          {/* Right: Actions */}
-          <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap shrink-0">
-            {/* Combined Sync & Connected Indicator:
-                When not connected -> Shows "Sync" button to log into Google Drive
-                When connected -> Shows neatly styled green "Connected" indicator in this exact slot */}
-            {!driveConnected ? (
-              <button
-                type="button"
-                onClick={handleConnectGoogleDrive}
-                disabled={syncingDrive}
-                data-testid="connect-google-drive-btn"
-                title="Connect your Google Drive account"
-                className="btn-ink liquid-press flex h-9.5 min-w-[6.2rem] items-center justify-center gap-2 rounded-full px-5 text-xs font-semibold shadow-sm cursor-pointer"
-              >
-                <HardDrive className={`h-3.5 w-3.5 ${syncingDrive ? "animate-spin" : ""}`} />
-                <span>{syncingDrive ? "Connecting…" : "Sync"}</span>
-              </button>
-            ) : (
-              <div
-                data-testid="drive-connected-indicator"
-                className="inline-flex h-9.5 items-center gap-2 rounded-full px-4 text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25 shadow-sm select-none"
-              >
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span>Connected</span>
+          {/* Aligned Header Metadata Strip: Root Folder on left, Signed-in Account on right */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-glass-edge/60 pt-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 min-w-0">
+              <FolderOpen className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span>Drive Root:</span>
+              <span className="rounded-full bg-glass/60 border border-glass-edge px-2.5 py-0.5 text-[11px] text-foreground font-mono truncate">
+                {cloudFolderName}/
+              </span>
+            </div>
+
+            {driveConnected && (
+              <div className="flex items-center gap-1.5 min-w-0 sm:justify-end">
+                <Mail className="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400 shrink-0" />
+                <span className="truncate font-mono text-[11px] text-foreground/90">
+                  {driveEmail || "Google Drive"}
+                </span>
               </div>
             )}
-
-            <button
-              type="button"
-              onClick={() => {
-                setRenameFolderInput(cloudFolderName);
-                setRenameFolderModalOpen(true);
-              }}
-              data-testid="rename-cloud-folder-btn"
-              title="Rename root Google Drive folder"
-              className="glass-pill liquid-press flex h-9.5 min-w-[5.5rem] items-center justify-center gap-1.5 rounded-full px-4 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge"
-            >
-              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
-              <span>Rename</span>
-            </button>
           </div>
         </GlassCard>
 
@@ -564,8 +574,17 @@ function CloudupPage() {
           />
 
           <div
+            role="button"
+            tabIndex={0}
+            aria-label="Browse or drop files to upload to Google Drive"
             onClick={() => inlineFileInputRef.current?.click()}
-            className={`group relative flex flex-col items-center justify-center rounded-[2rem] border-2 border-dashed p-8 sm:p-12 text-center transition-all duration-300 cursor-pointer select-none ${
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                inlineFileInputRef.current?.click();
+              }
+            }}
+            className={`group relative flex flex-col items-center justify-center rounded-[2rem] border-2 border-dashed p-6 sm:p-10 md:p-12 text-center transition-all duration-300 cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-primary/60 ${
               isDraggingFile
                 ? "border-primary bg-primary/10 shadow-lg scale-[1.008]"
                 : "border-glass-edge/80 hover:border-primary/50 bg-glass/30 hover:bg-glass/50"

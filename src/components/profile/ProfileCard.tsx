@@ -485,10 +485,10 @@ export function ProfileCard({ className = "" }: { className?: string }) {
               </div>
               <span className="font-medium text-foreground">@{editUsername || currentUsername}</span>
             </div>
-            <div className="flex items-center justify-between text-xs pt-0.5">
-              <span className="text-muted-foreground">Account Email</span>
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-foreground">{currentEmail}</span>
+            <div className="flex items-center justify-between gap-3 text-xs pt-0.5">
+              <span className="shrink-0 text-muted-foreground">Account Email</span>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-medium text-foreground">{currentEmail}</span>
                 <button
                   type="button"
                   onClick={() => {
@@ -496,7 +496,8 @@ export function ProfileCard({ className = "" }: { className?: string }) {
                     toast.success("Email copied to clipboard");
                   }}
                   title="Copy email"
-                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Copy email address"
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
                 >
                   <Copy className="h-3.5 w-3.5" />
                 </button>

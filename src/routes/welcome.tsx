@@ -55,7 +55,7 @@ function Welcome() {
       </div>
 
       {/* Neatly aligned controls directly below the profile card */}
-      <div className="mt-5 flex w-full max-w-2xl items-center justify-between px-1">
+      <div className="mt-5 flex w-full max-w-2xl flex-wrap items-center justify-between gap-2.5 px-1">
         <Link
           to="/app/messages"
           className="glass-pill liquid-press inline-flex h-10 items-center gap-2 rounded-full px-5 text-xs font-medium text-foreground hover:bg-glass-strong border border-glass-edge shadow-sm"

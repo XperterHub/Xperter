@@ -88,10 +88,10 @@ function Landing() {
       <section className="relative mx-auto flex min-h-dvh max-w-7xl flex-col items-center justify-center px-5 pt-24 pb-16 sm:px-8 lg:px-10">
         <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center rounded-[2.25rem] border border-solid border-glass-edge px-6 py-10 text-center sm:px-12 sm:py-14">
           <h1 className="animate-rise text-2xl font-light tracking-[-0.03em] leading-[1.18] sm:text-4xl md:text-5xl lg:text-[3.25rem]">
-            <span className="block sm:whitespace-nowrap">
+            <span className="block lg:whitespace-nowrap">
               Instant threads, live polls, voice rooms &amp; vault
             </span>
-            <span className="mt-1.5 block text-muted-foreground sm:whitespace-nowrap">
+            <span className="mt-1.5 block text-muted-foreground lg:whitespace-nowrap">
               unified in one distraction-free team workspace.
             </span>
           </h1>

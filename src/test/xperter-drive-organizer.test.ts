@@ -292,4 +292,100 @@ describe("Xperter Google Drive Folder Management & Intelligent File Organization
     expect(vidDest.folderPath).toBe("Xperter/Videos");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it("formats storage sizes accurately and fetches real Google Drive storage quota", async () => {
+    expect(formatStorageQuotaBytes(16106127360)).toBe("15.0 GB");
+    expect(formatStorageQuotaBytes(512 * 1024 * 1024)).toBe("512.0 MB");
+    expect(formatFileSize(2 * 1024 * 1024 * 1024)).toBe("2.00 GB");
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        storageQuota: {
+          limit: "16106127360",
+          usage: "2576980378",
+          usageInDrive: "2000000000",
+          usageInDriveTrash: "1024",
+        },
+        user: {
+          emailAddress: "realuser@gmail.com",
+          displayName: "Real User",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setDriveAccessTokenInMemory("tok_real_123", "realuser@gmail.com");
+
+    const quota = await fetchGoogleDriveStorageQuota("tok_real_123");
+    expect(quota.isUnlimited).toBe(false);
+    expect(quota.limitBytes).toBe(16106127360);
+    expect(quota.usageBytes).toBe(2576980378);
+    expect(quota.freeBytes).toBe(16106127360 - 2576980378);
+    expect(quota.percentUsed).toBe(16);
+    expect(quota.userEmail).toBe("realuser@gmail.com");
+
+    // Clears stale token cleanly when Drive returns 401
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce({ ok: false, status: 401 }),
+    );
+    await expect(fetchGoogleDriveStorageQuota("tok_real_123")).rejects.toThrow(/expired/i);
+
+    setDriveAccessTokenInMemory(null, null);
+  });
+
+  it("fetches tracked non-folder files and supports unlimited resumable uploads > 5 MiB", async () => {
+    const fetchFilesMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        files: [
+          {
+            id: "drive_file_1",
+            name: "Report.pdf",
+            mimeType: "application/pdf",
+            size: "1048576",
+            modifiedTime: "2026-11-26T00:00:00Z",
+          },
+        ],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchFilesMock);
+    const items = await fetchGoogleDriveTrackedFiles({
+      accessToken: "tok_real_456",
+      rootFolderName: "esu",
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.folderPath).toBe("esu/Documents/PDF");
+    expect(items[0]?.syncedToDrive).toBe(true);
+
+    // Resumable upload path for > 5 MiB files
+    const largePayload = new File([new Uint8Array(6 * 1024 * 1024)], "LargeArchive.zip", {
+      type: "application/zip",
+    });
+    const resumableMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ Location: "https://upload.example.com/session1" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "resumable_1", name: "LargeArchive.zip", size: String(largePayload.size) }),
+      });
+    vi.stubGlobal("fetch", resumableMock);
+    const progressCalls: number[] = [];
+    const uploaded = await uploadBlobToDriveFolder({
+      file: largePayload,
+      parentId: "folder_arc",
+      accessToken: "tok_real_456",
+      onProgress: (p) => progressCalls.push(p),
+    });
+    expect(uploaded.id).toBe("resumable_1");
+    expect(progressCalls).toContain(100);
+    expect(resumableMock.mock.calls[0]?.[0]).toContain("uploadType=resumable");
+  });
 });

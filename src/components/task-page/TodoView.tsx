@@ -387,18 +387,18 @@ export function TodoView() {
   }, [todos, filter, priorityFilter, sortBy]);
 
   return (
-    <div className="relative flex h-full flex-col overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 lg:p-8">
+    <div className="relative flex h-full flex-col overflow-y-auto overflow-x-hidden px-3.5 pb-6 pt-16 sm:px-6 sm:pt-16 md:p-6 lg:p-8 lg:pl-20">
       <div className="mx-auto w-full max-w-4xl">
         {/* Sleek, Theme-Harmonious Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="pl-14 sm:pl-16">
+          <div className="min-w-0">
             <h1 className="bg-gradient-to-r from-foreground via-foreground/90 to-muted-foreground bg-clip-text text-2xl font-bold tracking-tight text-transparent sm:text-3xl md:text-4xl">
               Task Matrix
             </h1>
           </div>
 
           {/* Integrated Glass Progress & Task Settings Bar */}
-          <div className="flex items-center gap-2.5 self-start sm:self-auto">
+          <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
             {/* Progress Pill */}
             <div className="glass flex h-10 items-center gap-3 rounded-full border border-border/40 px-3.5 shadow-sm">
               <div className="flex items-center gap-1.5 text-xs font-semibold tabular-nums text-foreground">
@@ -601,7 +601,7 @@ export function TodoView() {
               value={quickText}
               onChange={(e) => setQuickText(e.target.value)}
               placeholder="Add task directly (e.g. Meeting at 4pm)..."
-              className="h-9 border-none bg-transparent px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
+              className="h-9 min-w-0 flex-1 border-none bg-transparent px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
             />
 
             {/* Quick Priority Selector */}
@@ -672,7 +672,7 @@ export function TodoView() {
           {/* Filter, Sort & Bulk Controls */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
             {/* Filter Tabs */}
-            <div className="glass flex items-center gap-1 rounded-full border border-border/60 p-1">
+            <div className="glass flex max-w-full flex-wrap items-center gap-1 rounded-2xl border border-border/60 p-1 sm:rounded-full">
               {(["all", "habits", "tasks", "completed"] as const).map((tab) => {
                 const count =
                   tab === "all"

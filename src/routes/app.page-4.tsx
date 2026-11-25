@@ -394,13 +394,14 @@ function VaultPage() {
       if (token && selectedFile) {
         try {
           const driveRes = await uploadVaultDocumentToGoogleDrive({
-            accessToken: token,
-            folderName,
-            renamedFileName: naming.fullFileName,
+            username: activeUser,
+            docKey: activeUploadDef.key,
+            customTitle: customDocTitle.trim() || undefined,
             file: selectedFile,
-            docCategory: activeUploadDef.label,
+            existingDriveFileId: existingDoc?.driveFileId,
+            accessToken: token,
           });
-          driveFileId = driveRes.fileId;
+          driveFileId = driveRes.driveFileId;
           driveWebViewLink = driveRes.webViewLink;
           syncedToDrive = true;
         } catch {
@@ -483,14 +484,14 @@ function VaultPage() {
   return (
     <div
       data-testid="vault-page-root"
-      className="relative flex min-h-full flex-col justify-start p-4 sm:p-6 md:p-8"
+      className="glass-scroll relative flex h-full w-full flex-col justify-start overflow-y-auto px-4 pb-10 pt-16 sm:px-6 sm:pt-16 lg:pl-20 lg:pr-8 lg:pt-8"
     >
       <div className="w-full max-w-7xl mx-auto space-y-6">
         {/* Top Header Card */}
         <GlassCard
           variant="panel"
           padding="md"
-          className="frost-panel flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 sm:p-6"
+          className="frost-panel flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 sm:p-6"
         >
           <div className="flex items-center gap-3.5 min-w-0">
             <div className="bg-pearl flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm">
@@ -501,7 +502,7 @@ function VaultPage() {
               )}
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-base sm:text-lg font-bold text-foreground tracking-tight">
                   Document Vault
                 </h1>
@@ -527,7 +528,7 @@ function VaultPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap shrink-0">
             {!secondaryVerified ? (
               <button
                 type="button"
@@ -687,14 +688,14 @@ function VaultPage() {
 
                       {stored ? (
                         <div className="mt-3 rounded-xl border border-glass-edge bg-glass/60 px-3 py-2 text-xs space-y-0.5">
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">ID:</span>
-                            <span className="font-medium text-foreground tabular-nums">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="shrink-0 text-muted-foreground">ID:</span>
+                            <span className="truncate font-medium text-foreground tabular-nums">
                               {stored.documentNumber}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Holder:</span>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="shrink-0 text-muted-foreground">Holder:</span>
                             <span className="truncate font-medium text-foreground">
                               {stored.holderName}
                             </span>
@@ -799,7 +800,7 @@ function VaultPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3.5 flex items-center gap-1.5 border-t border-glass-edge pt-3">
+                  <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-glass-edge pt-3">
                     <button
                       type="button"
                       onClick={() => handleSecureView(privDoc)}
