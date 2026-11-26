@@ -52,6 +52,7 @@ describe("Vault Page (/app/page-4)", () => {
 
     expect(screen.getByTestId("vault-page-root")).toBeInTheDocument();
     expect(screen.getByTestId("vault-lock-status-badge")).toHaveTextContent("Protected");
+    expect(screen.getByTestId("vault-lock-status-badge").closest(".box-lens-open")).not.toBeNull();
     // Only a single unlock/setup button exists
     expect(screen.getAllByTestId("unlock-vault-btn")).toHaveLength(1);
 
@@ -120,6 +121,7 @@ describe("Vault Page (/app/page-4)", () => {
     // Open Custom Document Viewer
     fireEvent.click(screen.getByTestId("view-doc-btn-aadharcard"));
     const viewerModal = await screen.findByTestId("vault-document-viewer-modal");
+    expect(viewerModal).toHaveClass("settings-popover");
     expect(within(viewerModal).getByText("145523655236")).toBeInTheDocument();
     expect(within(viewerModal).getByTitle("Aadhaar Card")).toBeInTheDocument();
 

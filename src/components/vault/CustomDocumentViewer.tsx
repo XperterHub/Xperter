@@ -160,8 +160,9 @@ export function CustomDocumentViewer({
         <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[80] transition-opacity" />
         <Dialog.Content
           data-testid="vault-document-viewer-modal"
+          data-fullscreen={isFullscreen ? "true" : "false"}
           aria-describedby="viewer-meta-bar"
-          className={`frost-panel glass fixed left-1/2 top-1/2 z-[85] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden border border-glass-edge text-foreground shadow-2xl outline-none transition-all duration-300 ${
+          className={`settings-popover glass fixed left-1/2 top-1/2 z-[85] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden border border-glass-edge text-foreground shadow-2xl outline-none transition-[width,height,max-width,border-radius] duration-300 ${
             isFullscreen
               ? "h-[96dvh] w-[96vw] max-w-[96vw] rounded-[1.5rem] p-3 sm:p-4"
               : "h-[min(88dvh,46rem)] w-[min(94vw,60rem)] rounded-[1.75rem] p-3.5 sm:p-5"

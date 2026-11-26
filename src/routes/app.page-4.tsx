@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   Download,
@@ -590,7 +590,7 @@ function VaultPage() {
           <GlassCard
             variant="panel"
             padding="none"
-            className="frost-panel animate-liquid flex flex-col items-center space-y-6 p-6 text-center sm:p-8"
+            className="frost-panel box-lens-open flex flex-col items-center space-y-6 p-6 text-center sm:p-8"
           >
             {/* Brand + Status Header */}
             <div className="flex flex-col items-center space-y-3">
@@ -706,7 +706,7 @@ function VaultPage() {
           <GlassCard
             variant="panel"
             padding="none"
-            className="frost-panel flex flex-col justify-between gap-3.5 p-4 sm:p-5 lg:flex-row lg:items-center"
+            className="frost-panel box-lens-open flex flex-col justify-between gap-3.5 p-4 sm:p-5 lg:flex-row lg:items-center"
           >
             {/* Left: Identity & Status */}
             <div className="flex min-w-0 items-center gap-3">
@@ -846,7 +846,7 @@ function VaultPage() {
               {/* Saved Documents Grid OR Minimal Empty State */}
               {filteredVaultDocs.length > 0 ? (
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {filteredVaultDocs.map((docItem) => {
+                  {filteredVaultDocs.map((docItem, idx) => {
                     const isImageThumb = Boolean(
                       docItem.mimeType?.startsWith("image/") &&
                         docItem.dataUrl?.startsWith("data:image/"),
@@ -865,7 +865,8 @@ function VaultPage() {
                         variant="panel"
                         padding="none"
                         data-testid={`vault-doc-card-${docItem.docKey}`}
-                        className="frost-panel flex flex-col justify-between gap-3.5 p-4 shadow-sm"
+                        style={{ "--box-delay": `${Math.min(idx, 6) * 45}ms` } as CSSProperties}
+                        className="frost-panel box-lens-open flex flex-col justify-between gap-3.5 p-4 shadow-sm"
                       >
                         <div className="space-y-3">
                           {/* Title Row */}
@@ -975,7 +976,7 @@ function VaultPage() {
                 <GlassCard
                   variant="panel"
                   padding="none"
-                  className="frost-panel my-auto flex flex-col items-center justify-center space-y-4 p-8 text-center sm:p-10"
+                  className="frost-panel box-lens-open my-auto flex flex-col items-center justify-center space-y-4 p-8 text-center sm:p-10"
                 >
                   <div className="bg-pearl flex h-12 w-12 items-center justify-center rounded-2xl border border-glass-edge text-muted-foreground">
                     <FileText className="h-6 w-6" />
@@ -1004,7 +1005,8 @@ function VaultPage() {
                 <GlassCard
                   variant="panel"
                   padding="none"
-                  className="frost-panel flex flex-wrap items-center gap-2 p-3.5 sm:px-4"
+                  style={{ "--box-delay": "90ms" } as CSSProperties}
+                  className="frost-panel box-lens-open flex flex-wrap items-center gap-2 p-3.5 sm:px-4"
                 >
                   <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Quick Add
@@ -1033,7 +1035,7 @@ function VaultPage() {
             <GlassCard
               variant="panel"
               padding="none"
-              className="frost-panel animate-liquid mx-auto w-full max-w-2xl space-y-5 p-5 sm:p-7"
+              className="frost-panel box-lens-open mx-auto w-full max-w-2xl space-y-5 p-5 sm:p-7"
             >
               <div className="flex items-center justify-between border-b border-glass-edge pb-3.5">
                 <h2 className="text-base font-semibold tracking-tight text-foreground">
@@ -1248,7 +1250,7 @@ function VaultPage() {
       <Dialog.Root open={personalDetailsOpen} onOpenChange={setPersonalDetailsOpen}>
         <Dialog.Portal>
           <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[85]" />
-          <Dialog.Content className="frost-panel glass fixed left-1/2 top-1/2 z-[90] max-h-[88dvh] w-[min(92vw,30rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none sm:p-6">
+          <Dialog.Content className="settings-popover glass fixed left-1/2 top-1/2 z-[90] max-h-[88dvh] w-[min(92vw,30rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none sm:p-6">
             <div className="flex items-center justify-between border-b border-glass-edge pb-3">
               <div>
                 <Dialog.Title className="text-base font-semibold">Personal Info</Dialog.Title>
@@ -1380,7 +1382,7 @@ function VaultPage() {
           <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[85]" />
           <Dialog.Content
             data-testid="upload-vault-doc-modal"
-            className="frost-panel glass fixed left-1/2 top-1/2 z-[90] max-h-[86dvh] w-[min(92vw,30rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none sm:p-6"
+            className="settings-popover glass fixed left-1/2 top-1/2 z-[90] max-h-[86dvh] w-[min(92vw,30rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none sm:p-6"
           >
             {activeUploadDef && (
               <>
@@ -1518,7 +1520,7 @@ function VaultPage() {
       <Dialog.Root open={changingVaultPass} onOpenChange={setChangingVaultPass}>
         <Dialog.Portal>
           <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[85]" />
-          <Dialog.Content className="frost-panel glass fixed left-1/2 top-1/2 z-[90] w-[min(92vw,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none">
+          <Dialog.Content className="settings-popover glass fixed left-1/2 top-1/2 z-[90] w-[min(92vw,24rem)] -translate-x-1/2 -translate-y-1/2 rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none">
             <div className="flex items-center justify-between border-b border-glass-edge pb-3">
               <div className="flex items-center gap-2">
                 <KeyRound className="h-4 w-4 text-primary" />
@@ -1597,7 +1599,7 @@ function VaultPage() {
       >
         <Dialog.Portal>
           <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[85]" />
-          <Dialog.Content className="frost-panel glass fixed left-1/2 top-1/2 z-[90] w-[min(92vw,22rem)] -translate-x-1/2 -translate-y-1/2 rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none">
+          <Dialog.Content className="settings-popover glass fixed left-1/2 top-1/2 z-[90] w-[min(92vw,22rem)] -translate-x-1/2 -translate-y-1/2 rounded-[1.75rem] border border-glass-edge p-5 text-foreground shadow-2xl outline-none">
             <div className="space-y-3 text-center">
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
                 <Trash2 className="h-5 w-5" />

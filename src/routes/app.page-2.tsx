@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, type CSSProperties } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   CheckCircle2,
@@ -389,7 +389,7 @@ function CloudupPage() {
         <GlassCard
           variant="panel"
           padding="md"
-          className="frost-panel flex flex-col gap-4 p-5 sm:p-6"
+          className="frost-panel box-lens-open flex flex-col gap-4 p-5 sm:p-6"
         >
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             {/* Left: Icon + Title + Concise Description */}
@@ -480,7 +480,8 @@ function CloudupPage() {
         <GlassCard
           variant="panel"
           padding="md"
-          className="frost-panel flex flex-col p-5 sm:p-6"
+          style={{ "--box-delay": "50ms" } as CSSProperties}
+          className="frost-panel box-lens-open flex flex-col p-5 sm:p-6"
         >
           {/* Card Header with Medium Refresh Button */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 pb-4 border-b border-glass-edge/60">
@@ -682,7 +683,7 @@ function CloudupPage() {
 
           {/* Staging queue: displays picked files with direct upload action */}
           {stagedFiles.length > 0 && (
-            <GlassCard variant="panel" padding="md" className="frost-panel p-5 animate-liquid space-y-4">
+            <GlassCard variant="panel" padding="md" className="frost-panel box-lens-open p-5 space-y-4">
               <div className="flex items-center justify-between border-b border-glass-edge pb-3 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <CheckCircle2 className="h-4.5 w-4.5 text-emerald-400" />

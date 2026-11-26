@@ -11,7 +11,7 @@ export function AuthLayout({ title, subtitle, children }: { title: string; subti
       <GlassCard
         variant="default"
         padding="lg"
-        className="animate-liquid w-full max-w-[470px]"
+        className="box-lens-open w-full max-w-[470px]"
       >
         <div className="flex justify-center"><BrandIcon size={62} /></div>
         <h1 className="mt-5 text-center text-2xl font-normal text-foreground sm:mt-6 sm:text-[1.75rem]">{title}</h1>

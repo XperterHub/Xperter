@@ -387,8 +387,29 @@ html.refract .glass {
 }
 .settings-popover {
   --settings-backdrop-blur: var(--glass-blur, 26px);
-  transform-origin: var(--radix-popover-content-transform-origin, center center);
-  max-height: var(--radix-popover-content-available-height, 82dvh);
+  transform-origin: var(
+    --radix-popover-content-transform-origin,
+    var(
+      --radix-dropdown-menu-content-transform-origin,
+      var(
+        --radix-select-content-transform-origin,
+        var(
+          --radix-hover-card-content-transform-origin,
+          var(--radix-context-menu-content-transform-origin, center center)
+        )
+      )
+    )
+  );
+  max-height: var(
+    --radix-popover-content-available-height,
+    var(
+      --radix-dropdown-menu-content-available-height,
+      var(
+        --radix-select-content-available-height,
+        var(--radix-context-menu-content-available-height, 90dvh)
+      )
+    )
+  );
   overflow-x: hidden;
   overflow-y: auto;
   background-color: color-mix(in oklab, var(--popover) 82%, transparent);
@@ -401,6 +422,9 @@ html.refract .glass {
     color 180ms ease,
     backdrop-filter 220ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: transform, opacity, clip-path, filter, backdrop-filter;
+}
+.settings-popover[data-fullscreen="true"] {
+  max-height: 96dvh;
 }
 html.refract .settings-popover {
   backdrop-filter: url(#liquid-lens) blur(var(--settings-backdrop-blur)) saturate(190%) brightness(var(--glass-bright, 1.06));
@@ -432,6 +456,19 @@ html.refract .settings-popover {
 }
 .settings-popover.settings-popover[data-state="closed"] > * {
   animation: settings-content-close 420ms cubic-bezier(0.32, 0, 0.2, 1) both;
+}
+.box-lens-open {
+  --settings-backdrop-blur: var(--glass-blur, 26px);
+  transform-origin: center center;
+  will-change: transform, opacity, clip-path, filter, backdrop-filter;
+  animation:
+    settings-lens-open 520ms cubic-bezier(0.16, 1, 0.3, 1) var(--box-delay, 0ms) both,
+    settings-glass-blur-open 520ms cubic-bezier(0.22, 1, 0.36, 1) var(--box-delay, 0ms) both;
+}
+.box-lens-open > * {
+  transform-origin: center center;
+  will-change: transform, opacity, filter;
+  animation: settings-content-open 520ms cubic-bezier(0.16, 1, 0.3, 1) var(--box-delay, 0ms) both;
 }
 @keyframes settings-lens-open {
   0% {
@@ -677,7 +714,9 @@ html.refract .settings-popover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .settings-popover[data-state] { animation: none; }
+  .settings-popover[data-state],
+  .box-lens-open,
+  .box-lens-open > * { animation: none; }
   .silk-background-image { transition: none; }
   .reaction-emoji-pop,
   .reaction-chip-pop { animation: none; }
