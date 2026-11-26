@@ -761,13 +761,165 @@ export async function deleteVaultDocumentFromGoogleDrive(
  * `<username>_<doctype>.<ext>` filename.
  */
 export function triggerVaultDocumentDownload(docItem: StoredVaultDocument): void {
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined" || !docItem.dataUrl) return;
   const link = document.createElement("a");
   link.href = docItem.dataUrl;
   link.download = docItem.renamedFileName || `${docItem.baseFileName}.png`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+const VAULT_IDB_NAME = "xperter_vault_store";
+const VAULT_IDB_STORE = "doc_blobs";
+const INLINE_STORAGE_CHAR_LIMIT = 240_000;
+
+function openVaultBlobDb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(VAULT_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(VAULT_IDB_STORE)) {
+          db.createObjectStore(VAULT_IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function saveVaultBlobDataUrl(docId: string, dataUrl: string): Promise<void> {
+  if (!docId || !dataUrl) return;
+  const db = await openVaultBlobDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(VAULT_IDB_STORE, "readwrite");
+      tx.objectStore(VAULT_IDB_STORE).put(dataUrl, docId);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    } catch {
+      db.close();
+      resolve();
+    }
+  });
+}
+
+export async function loadVaultBlobDataUrl(docId: string): Promise<string | null> {
+  if (!docId) return null;
+  const db = await openVaultBlobDb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(VAULT_IDB_STORE, "readonly");
+      const req = tx.objectStore(VAULT_IDB_STORE).get(docId);
+      req.onsuccess = () => {
+        const result = typeof req.result === "string" ? req.result : null;
+        db.close();
+        resolve(result);
+      };
+      req.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    } catch {
+      db.close();
+      resolve(null);
+    }
+  });
+}
+
+export async function deleteVaultBlobDataUrl(docId: string): Promise<void> {
+  if (!docId) return;
+  const db = await openVaultBlobDb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(VAULT_IDB_STORE, "readwrite");
+      tx.objectStore(VAULT_IDB_STORE).delete(docId);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    } catch {
+      db.close();
+      resolve();
+    }
+  });
+}
+
+/**
+ * Persists vault documents so metadata always fits in localStorage while large
+ * data URLs (>240KB) are stored safely in IndexedDB without triggering quota drops.
+ */
+export async function persistVaultDocumentsSafely(
+  userKey: string,
+  docs: StoredVaultDocument[],
+): Promise<void> {
+  const compactDocs: StoredVaultDocument[] = [];
+  for (const docItem of docs) {
+    if (docItem.dataUrl && docItem.dataUrl.length > INLINE_STORAGE_CHAR_LIMIT) {
+      await saveVaultBlobDataUrl(docItem.id, docItem.dataUrl);
+      compactDocs.push({ ...docItem, dataUrl: "" });
+    } else {
+      compactDocs.push(docItem);
+    }
+  }
+
+  const storage = getSafeLocalStorage();
+  try {
+    storage.setItem(`${VAULT_DOCS_PREFIX}${userKey}`, JSON.stringify(compactDocs));
+  } catch {
+    // If localStorage is still tight due to many records, offload remaining dataUrls to IndexedDB
+    const metadataOnly = await Promise.all(
+      docs.map(async (docItem) => {
+        if (docItem.dataUrl) {
+          await saveVaultBlobDataUrl(docItem.id, docItem.dataUrl);
+        }
+        return { ...docItem, dataUrl: "" };
+      }),
+    );
+    try {
+      storage.setItem(`${VAULT_DOCS_PREFIX}${userKey}`, JSON.stringify(metadataOnly));
+    } catch {
+      // Ignore unrecoverable storage errors
+    }
+  }
+}
+
+/**
+ * Loads vault documents synchronously from localStorage and rehydrates any
+ * large payloads saved in IndexedDB.
+ */
+export async function hydrateVaultDocumentsSafely(
+  userKey: string,
+  username: string,
+): Promise<StoredVaultDocument[]> {
+  const baseDocs = loadVaultDocuments(userKey, username);
+  if (baseDocs.length === 0) return baseDocs;
+  const hydrated = await Promise.all(
+    baseDocs.map(async (docItem) => {
+      if (docItem.dataUrl) return docItem;
+      const blobDataUrl = await loadVaultBlobDataUrl(docItem.id);
+      return blobDataUrl ? { ...docItem, dataUrl: blobDataUrl } : docItem;
+    }),
+  );
+  return hydrated;
 }
 
 export interface CloudUploadedItem {

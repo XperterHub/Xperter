@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  Check,
+  Copy,
   Download,
   FileCheck2,
   Maximize2,
@@ -9,12 +11,10 @@ import {
   X,
   ZoomIn,
   ZoomOut,
-  RotateCcw,
-  Copy,
-  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import type { StoredVaultDocument } from "@/lib/google-drive-vault";
+import { buildDocumentPreviewSvgDataUrl } from "@/lib/vault-specimen";
 
 interface CustomDocumentViewerProps {
   document: StoredVaultDocument | null;
@@ -22,6 +22,30 @@ interface CustomDocumentViewerProps {
   onClose: () => void;
   onDownload: (doc: StoredVaultDocument) => void;
   driveFolderName: string;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  try {
+    const commaIdx = dataUrl.indexOf(",");
+    if (commaIdx === -1) return null;
+    const header = dataUrl.slice(0, commaIdx);
+    const body = dataUrl.slice(commaIdx + 1);
+    const mimeMatch = header.match(/data:([^;]+)/i);
+    const mime = mimeMatch?.[1] || "application/octet-stream";
+
+    if (header.includes(";base64")) {
+      const binary = atob(body);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new Blob([bytes], { type: mime });
+    }
+
+    return new Blob([decodeURIComponent(body)], { type: mime });
+  } catch {
+    return null;
+  }
 }
 
 export function CustomDocumentViewer({
@@ -35,6 +59,74 @@ export function CustomDocumentViewer({
   const [rotation, setRotation] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+
+  const isPdf = Boolean(
+    doc &&
+      (doc.mimeType?.includes("pdf") ||
+        doc.dataUrl?.startsWith("data:application/pdf") ||
+        doc.originalFileName?.toLowerCase().endsWith(".pdf") ||
+        doc.renamedFileName?.toLowerCase().endsWith(".pdf")),
+  );
+
+  const isImage = Boolean(
+    doc &&
+      !isPdf &&
+      (doc.mimeType?.startsWith("image/") || doc.dataUrl?.startsWith("data:image/")),
+  );
+
+  // Convert PDF data URLs to an object URL so Chromium/Firefox render inside iframe cleanly
+  useEffect(() => {
+    if (
+      !isOpen ||
+      !doc ||
+      !isPdf ||
+      !doc.dataUrl ||
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+    ) {
+      setPdfBlobUrl(null);
+      return;
+    }
+    const blob = dataUrlToBlob(doc.dataUrl);
+    if (!blob) {
+      setPdfBlobUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    setPdfBlobUrl(objectUrl);
+    return () => {
+      if (typeof URL.revokeObjectURL === "function") {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [doc, isOpen, isPdf]);
+
+  // Reset transform whenever a new document opens
+  useEffect(() => {
+    if (isOpen) {
+      setZoom(1);
+      setRotation(0);
+    }
+  }, [isOpen, doc?.id]);
+
+  const fallbackPreviewUrl = useMemo(() => {
+    if (!doc) return "";
+    const isDark =
+      typeof window !== "undefined" &&
+      window.document.documentElement.classList.contains("dark");
+    return buildDocumentPreviewSvgDataUrl({
+      label: doc.label,
+      docKey: doc.docKey,
+      renamedFileName: doc.renamedFileName,
+      driveFolderName: doc.driveFolderName || driveFolderName,
+      holderName: doc.holderName,
+      documentNumber: doc.documentNumber,
+      ...(doc.issueDate ? { issueDate: doc.issueDate } : {}),
+      ...(doc.expiryDate ? { expiryDate: doc.expiryDate } : {}),
+      theme: isDark ? "dark" : "light",
+    });
+  }, [doc, driveFolderName]);
 
   if (!doc) return null;
 
@@ -42,148 +134,147 @@ export function CustomDocumentViewer({
     if (!doc.documentNumber) return;
     navigator.clipboard?.writeText(doc.documentNumber);
     setCopiedId(true);
-    toast.success("Document ID copied");
-    setTimeout(() => setCopiedId(false), 1800);
+    toast.success("ID copied");
+    setTimeout(() => setCopiedId(false), 1600);
   };
 
-  const handleZoomIn = () => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
-  const handleZoomOut = () => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)));
   const handleReset = () => {
     setZoom(1);
     setRotation(0);
   };
-  const handleRotate = () => setRotation((r) => (r + 90) % 360);
 
-  const isImage = Boolean(
-    doc.mimeType?.startsWith("image/") ||
-      (doc.fileDataUrl && doc.fileDataUrl.startsWith("data:image/")),
-  );
-  const isPdf = Boolean(
-    doc.mimeType?.includes("pdf") ||
-      doc.originalFileName?.toLowerCase().endsWith(".pdf") ||
-      doc.renamedFileName?.toLowerCase().endsWith(".pdf"),
-  );
+  const handleClose = () => {
+    handleReset();
+    setIsFullscreen(false);
+    onClose();
+  };
 
   return (
     <Dialog.Root
       open={isOpen}
       onOpenChange={(open) => {
-        if (!open) {
-          handleReset();
-          onClose();
-        }
+        if (!open) handleClose();
       }}
     >
       <Dialog.Portal>
         <Dialog.Overlay className="workspace-nav-overlay fixed inset-0 z-[80] transition-opacity" />
         <Dialog.Content
           data-testid="vault-document-viewer-modal"
-          aria-describedby="viewer-minimal-info"
-          className={`settings-popover glass fixed left-1/2 top-1/2 z-[85] flex flex-col -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[2rem] p-4 text-foreground outline-none border border-glass-edge shadow-2xl transition-all duration-300 ${
+          aria-describedby="viewer-meta-bar"
+          className={`frost-panel glass fixed left-1/2 top-1/2 z-[85] flex -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden border border-glass-edge text-foreground shadow-2xl outline-none transition-all duration-300 ${
             isFullscreen
-              ? "h-[96dvh] w-[96vw] max-w-[96vw]"
-              : "max-h-[90dvh] w-[min(94vw,56rem)]"
+              ? "h-[96dvh] w-[96vw] max-w-[96vw] rounded-[1.5rem] p-3 sm:p-4"
+              : "h-[min(88dvh,46rem)] w-[min(94vw,60rem)] rounded-[1.75rem] p-3.5 sm:p-5"
           }`}
         >
-          {/* Header Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-glass-edge/80 pb-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="bg-pearl flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-glass-edge shadow-sm text-primary">
-                <FileCheck2 className="h-5 w-5" />
+          {/* Compact Top Bar */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 border-b border-glass-edge/80 pb-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2.5">
+              <div className="bg-pearl flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-glass-edge text-primary shadow-sm">
+                <FileCheck2 className="h-4.5 w-4.5" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <Dialog.Title className="truncate text-base font-semibold text-foreground tracking-tight">
+                  <Dialog.Title className="truncate text-sm font-semibold tracking-tight text-foreground sm:text-base">
                     {doc.label}
                   </Dialog.Title>
                   <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 ${
+                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
                       doc.syncedToDrive
-                        ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30"
-                        : "bg-glass border border-glass-edge text-muted-foreground"
+                        ? "border border-emerald-500/30 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                        : "border border-glass-edge bg-glass text-muted-foreground"
                     }`}
                   >
-                    {doc.syncedToDrive ? "Drive Synced" : "Stored"}
+                    {doc.syncedToDrive ? "Drive" : "Local"}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="truncate">{doc.holderName}</span>
                   <span>·</span>
                   <button
                     type="button"
                     onClick={handleCopyId}
-                    title="Copy Document ID"
-                    className="inline-flex items-center gap-1 font-mono text-[11px] text-foreground hover:text-primary transition-colors cursor-pointer"
+                    title="Copy ID"
+                    className="inline-flex cursor-pointer items-center gap-1 font-mono text-[11px] text-foreground transition-colors hover:text-primary"
                   >
                     <span>{doc.documentNumber}</span>
                     {copiedId ? (
                       <Check className="h-3 w-3 text-emerald-500" />
                     ) : (
-                      <Copy className="h-3 w-3 opacity-60 hover:opacity-100" />
+                      <Copy className="h-3 w-3 opacity-60" />
                     )}
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* Viewer Controls */}
-            <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+            {/* Minimal Controls */}
+            <div className="flex flex-wrap items-center gap-1.5">
               <button
                 type="button"
-                onClick={handleZoomOut}
+                onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.25).toFixed(2)))}
                 disabled={zoom <= 0.5}
+                aria-label="Zoom out"
                 title="Zoom Out"
-                className="glass-pill liquid-press rounded-full p-2 text-muted-foreground hover:text-foreground border border-glass-edge disabled:opacity-40"
+                className="glass liquid-press flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-glass-edge text-muted-foreground hover:text-foreground disabled:opacity-40"
               >
-                <ZoomOut className="h-4 w-4" />
+                <ZoomOut className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={handleReset}
-                title="Reset Zoom & Rotation"
-                className="glass-pill liquid-press rounded-full px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground border border-glass-edge"
+                title="Reset View"
+                className="glass liquid-press h-8 cursor-pointer rounded-full border border-glass-edge px-2.5 text-[11px] font-medium tabular-nums text-muted-foreground hover:text-foreground"
               >
                 {Math.round(zoom * 100)}%
               </button>
               <button
                 type="button"
-                onClick={handleZoomIn}
+                onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
                 disabled={zoom >= 3}
+                aria-label="Zoom in"
                 title="Zoom In"
-                className="glass-pill liquid-press rounded-full p-2 text-muted-foreground hover:text-foreground border border-glass-edge disabled:opacity-40"
+                className="glass liquid-press flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-glass-edge text-muted-foreground hover:text-foreground disabled:opacity-40"
               >
-                <ZoomIn className="h-4 w-4" />
+                <ZoomIn className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
-                onClick={handleRotate}
+                onClick={() => setRotation((r) => (r + 90) % 360)}
+                aria-label="Rotate"
                 title="Rotate 90°"
-                className="glass-pill liquid-press rounded-full p-2 text-muted-foreground hover:text-foreground border border-glass-edge"
+                className="glass liquid-press flex h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-glass-edge text-muted-foreground hover:text-foreground"
               >
-                <RotateCw className="h-4 w-4" />
+                <RotateCw className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={() => setIsFullscreen((f) => !f)}
+                aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                 title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-                className="glass-pill liquid-press rounded-full p-2 text-muted-foreground hover:text-foreground border border-glass-edge"
+                className="glass liquid-press hidden h-8 w-8 cursor-pointer items-center justify-center rounded-full border border-glass-edge text-muted-foreground hover:text-foreground sm:flex"
               >
-                {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                {isFullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => onDownload(doc)}
-                title="Download Document"
-                className="btn-ink liquid-press inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold shadow-sm"
+                disabled={!doc.dataUrl}
+                className="btn-ink liquid-press inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3 text-xs font-semibold shadow-sm disabled:opacity-40"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span>Download</span>
+                <span className="hidden xs:inline sm:inline">Download</span>
               </button>
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  title="Close Viewer"
-                  className="rounded-full p-2 text-muted-foreground hover:text-foreground hover:bg-glass"
+                  onClick={handleClose}
+                  aria-label="Close"
+                  className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full text-muted-foreground hover:bg-glass hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -191,47 +282,36 @@ export function CustomDocumentViewer({
             </div>
           </div>
 
-          {/* Interactive Document Display Canvas */}
-          <div className="relative flex-1 min-h-[360px] max-h-[calc(90dvh-120px)] overflow-auto rounded-2xl border border-glass-edge/80 bg-glass/30 p-3 sm:p-5 flex items-center justify-center my-3">
-            {isPdf && doc.fileDataUrl ? (
+          {/* Viewport Stage */}
+          <div className="glass-scroll relative my-3 flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-2xl border border-glass-edge/80 bg-background/40 p-2 sm:p-4">
+            {isPdf && pdfBlobUrl ? (
               <div
                 style={{
                   transform: `scale(${zoom}) rotate(${rotation}deg)`,
                   transformOrigin: "center center",
                   transition: "transform 0.2s ease-out",
                 }}
-                className="w-full h-full min-h-[460px] flex items-center justify-center"
+                className="flex h-full w-full items-center justify-center"
               >
-                <object
-                  data={doc.fileDataUrl}
-                  type="application/pdf"
-                  className="w-full h-full min-h-[460px] rounded-xl shadow-lg border border-glass-edge/40 bg-white dark:bg-slate-900"
-                >
-                  <div className="flex flex-col items-center justify-center p-8 text-center space-y-3">
-                    <img
-                      src={doc.previewDataUrl || doc.fileDataUrl}
-                      alt={doc.label}
-                      className="max-h-[380px] rounded-xl object-contain shadow-md"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Previewing secure PDF certificate. Click download for native viewing.
-                    </p>
-                  </div>
-                </object>
+                <iframe
+                  title={doc.label}
+                  src={`${pdfBlobUrl}#toolbar=0&navpanes=0&view=FitH`}
+                  className="h-full min-h-[20rem] w-full rounded-xl border border-glass-edge/60 bg-background/80 shadow-lg"
+                />
               </div>
-            ) : isImage && doc.fileDataUrl ? (
+            ) : isImage && doc.dataUrl ? (
               <div
                 style={{
                   transform: `scale(${zoom}) rotate(${rotation}deg)`,
                   transformOrigin: "center center",
                   transition: "transform 0.2s ease-out",
                 }}
-                className="flex items-center justify-center"
+                className="flex max-h-full max-w-full items-center justify-center"
               >
                 <img
-                  src={doc.fileDataUrl}
+                  src={doc.dataUrl}
                   alt={doc.label}
-                  className="max-h-[520px] max-w-full rounded-xl object-contain shadow-md"
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-md"
                 />
               </div>
             ) : (
@@ -241,33 +321,31 @@ export function CustomDocumentViewer({
                   transformOrigin: "center center",
                   transition: "transform 0.2s ease-out",
                 }}
-                className="flex items-center justify-center"
+                className="flex max-h-full max-w-full items-center justify-center"
               >
                 <img
-                  src={doc.previewDataUrl || doc.fileDataUrl}
+                  src={doc.dataUrl?.startsWith("data:image/") ? doc.dataUrl : fallbackPreviewUrl}
                   alt={doc.label}
-                  className="max-h-[440px] max-w-full rounded-xl object-contain shadow-md"
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-md"
                 />
               </div>
             )}
           </div>
 
-          {/* Minimal Info Bar (Simple, Concise, No Long Sentences) */}
+          {/* Concise Footer Metadata */}
           <div
-            id="viewer-minimal-info"
+            id="viewer-meta-bar"
             className="flex flex-wrap items-center justify-between gap-2 border-t border-glass-edge/70 pt-2.5 text-[11px] text-muted-foreground"
           >
-            <div className="flex items-center gap-3">
-              <span>
-                File: <strong className="text-foreground font-medium">{doc.renamedFileName}</strong>
-              </span>
+            <div className="flex min-w-0 items-center gap-2 truncate">
+              <span className="truncate font-mono text-foreground/90">{doc.renamedFileName}</span>
               <span>·</span>
-              <span>Size: {doc.sizeFormatted}</span>
+              <span className="shrink-0 tabular-nums">{doc.sizeFormatted}</span>
             </div>
-            <div className="flex items-center gap-3">
-              <span>Drive: {driveFolderName}/</span>
+            <div className="flex shrink-0 items-center gap-2">
+              <span>{doc.driveFolderName || driveFolderName}/</span>
               <span>·</span>
-              <span>Format: {isPdf ? "PDF" : isImage ? "Image" : "Document"}</span>
+              <span>{isPdf ? "PDF" : isImage ? "Image" : "Record"}</span>
             </div>
           </div>
         </Dialog.Content>
